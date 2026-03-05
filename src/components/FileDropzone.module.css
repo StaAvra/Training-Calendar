@@ -1,0 +1,84 @@
+.dropzone {
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-2xl);
+    text-align: center;
+    transition: all 0.2s ease;
+    background-color: rgba(22, 27, 34, 0.5);
+    /* semi-transparent bg-secondary */
+    cursor: pointer;
+    min-height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dropzone:hover,
+.dragOver {
+    border-color: var(--accent-primary);
+    background-color: rgba(31, 111, 235, 0.05);
+}
+
+.content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-md);
+    width: 100%;
+}
+
+.label {
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.hiddenInput {
+    display: none;
+}
+
+.success {
+    color: var(--accent-secondary);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.error {
+    color: var(--accent-danger);
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    margin-top: var(--space-md);
+    font-size: 0.875rem;
+}
+
+.resetBtn {
+    margin-top: var(--space-md);
+    background: transparent;
+    color: var(--text-accent);
+    text-decoration: underline;
+}
+
+.spinner {
+    border: 3px solid rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    border-top: 3px solid var(--accent-primary);
+    width: 24px;
+    height: 24px;
+    animation: spin 1s linear infinite;
+    margin-right: var(--space-sm);
+}
+
+@keyframes spin {
+    0% {
+        transform: rotate(0deg);
+    }
+
+    100% {
+        transform: rotate(360deg);
+    }
+}

@@ -1,0 +1,348 @@
+.grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2xl);
+    max-width: 1200px;
+}
+
+.biocard,
+.formCard {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: var(--space-xl);
+    height: 100%;
+}
+
+.cardHeader {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    margin-bottom: var(--space-lg);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: var(--space-md);
+}
+
+.cardHeader h3 {
+    margin: 0;
+    font-size: 1.25rem;
+}
+
+.dnaContent {
+    animation: fadeIn 0.5s ease;
+}
+
+.formulaGrid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-md);
+    margin-bottom: var(--space-xl);
+}
+
+.formulaStat {
+    background: var(--bg-secondary);
+    padding: var(--space-md);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border: 1px solid var(--border-color);
+}
+
+.formulaVal {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: var(--accent-primary);
+}
+
+.formulaStat label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    margin-top: 4px;
+}
+
+.distributionSection {
+    margin-top: var(--space-xl);
+    padding-top: var(--space-lg);
+    border-top: 1px solid var(--border-color);
+}
+
+.distGrid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-sm);
+}
+
+.distItem {
+    background: var(--bg-secondary);
+    padding: var(--space-xs);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border: 1px solid var(--border-color);
+}
+
+.distCount {
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
+.distLabel {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.statRow {
+    display: flex;
+    justify-content: space-around;
+    margin-top: var(--space-xl);
+}
+
+.stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.stat span {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
+.stat small {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+}
+
+.formGroup {
+    margin-bottom: var(--space-lg);
+}
+
+.formGroup label {
+    display: block;
+    margin-bottom: var(--space-xs);
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.select,
+.range {
+    width: 100%;
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.generateBtn {
+    width: 100%;
+    padding: 12px;
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.2s;
+}
+
+.generateBtn:hover {
+    background: var(--accent-secondary);
+}
+
+.generateBtn:disabled {
+    background: var(--border-color);
+    cursor: not-allowed;
+}
+
+.recCard {
+    grid-column: 1 / -1;
+    background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+    border: 1px solid var(--accent-primary);
+    border-radius: 12px;
+    padding: var(--space-2xl);
+    animation: slideUp 0.5s ease;
+}
+
+.recTitle {
+    font-size: 2rem;
+    margin-bottom: var(--space-lg);
+    color: var(--accent-primary);
+    text-align: center;
+}
+
+.recBody {
+    display: flex;
+    gap: var(--space-2xl);
+    align-items: center;
+}
+
+.recText {
+    flex: 1;
+}
+
+.recDesc {
+    font-size: 1.1rem;
+    line-height: 1.6;
+    margin-bottom: var(--space-lg);
+}
+
+.recContext {
+    background: rgba(59, 130, 246, 0.1);
+    border-left: 4px solid var(--accent-primary);
+    padding: var(--space-md);
+    border-radius: 4px;
+    font-size: 0.95rem;
+}
+
+.recChart {
+    flex: 1;
+    min-width: 300px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.trendsGrid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-sm);
+    margin-bottom: var(--space-xl);
+}
+
+.trendItem {
+    background: var(--bg-secondary);
+    padding: var(--space-sm);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transition: transform 0.2s;
+}
+
+.trendItem:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent-primary);
+}
+
+.trendLabel {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    text-transform: capitalize;
+}
+
+.trendVal {
+    font-size: 1.1rem;
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
+.trendVal small {
+    font-size: 0.7rem;
+    font-weight: normal;
+    color: var(--text-muted);
+}
+
+.trendPct {
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-top: 4px;
+}
+
+.increase {
+    color: #22c55e;
+}
+
+.decrease {
+    color: #ef4444;
+}
+
+.averagesSection {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-md);
+    background: var(--bg-secondary);
+    padding: var(--space-lg);
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    margin-bottom: var(--space-xl);
+}
+
+.avgStat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.avgStat:first-child {
+    border-right: 1px solid var(--border-color);
+}
+
+.avgVal {
+    font-size: 1.75rem;
+    font-weight: 800;
+    color: var(--accent-primary);
+    line-height: 1;
+    margin-bottom: 8px;
+}
+
+.avgStat label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.avgStat label small {
+    display: block;
+    margin-top: 2px;
+    opacity: 0.8;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@media (max-width: 768px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    .recBody {
+        flex-direction: column;
+    }
+
+    .trendsGrid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}

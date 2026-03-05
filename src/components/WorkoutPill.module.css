@@ -1,0 +1,67 @@
+.workoutPill {
+    background-color: var(--bg-tertiary);
+    border-left: 3px solid var(--accent-secondary);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    transition: filter 0.2s;
+    position: relative;
+    /* For badges if absolute */
+}
+
+.goldBorder {
+    border-color: #fbbf24;
+    /* Gold */
+    background: linear-gradient(to right, rgba(251, 191, 36, 0.1), var(--bg-tertiary));
+}
+
+.greenBorder {
+    border-color: #22c55e;
+    /* Green */
+}
+
+.workoutPill:hover {
+    filter: brightness(1.1);
+}
+
+.pillPower {
+    color: var(--text-secondary);
+    font-size: 0.8em;
+    font-weight: 500;
+}
+
+.timeProp {
+    font-weight: 500;
+}
+
+.badges {
+    display: flex;
+    gap: 4px;
+}
+
+.badgePower {
+    width: 6px;
+    height: 6px;
+    background-color: #fbbf24;
+    /* Gold */
+    border-radius: 50%;
+    box-shadow: 0 0 4px rgba(251, 191, 36, 0.6);
+}
+
+.badgeEf {
+    width: 6px;
+    height: 6px;
+    background-color: #22c55e;
+    /* Green */
+    border-radius: 50%;
+    box-shadow: 0 0 4px rgba(34, 197, 94, 0.6);
+}

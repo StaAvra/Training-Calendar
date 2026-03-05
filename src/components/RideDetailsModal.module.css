@@ -1,0 +1,252 @@
+.container {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xl);
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: var(--space-md);
+}
+
+.title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.titleInput {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--accent-primary);
+    color: var(--text-primary);
+    font-size: 1.5rem;
+    padding: var(--space-xs) var(--space-sm);
+    border-radius: var(--radius-sm);
+    width: 100%;
+}
+
+.actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.iconBtn {
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 8px;
+    border-radius: 50%;
+    transition: all 0.2s;
+}
+
+.iconBtn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: var(--space-md);
+}
+
+.statBox {
+    background: var(--bg-tertiary);
+    padding: var(--space-md);
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    border: 1px solid transparent;
+    transition: border-color 0.2s;
+}
+
+.statBox:hover {
+    border-color: var(--border-color);
+}
+
+.statBox .icon {
+    flex-shrink: 0;
+    opacity: 0.8;
+}
+
+.value {
+    display: block;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.label {
+    display: block;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
+.valInput {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-size: 1.1rem;
+    font-weight: 600;
+    width: 80px;
+    padding: 2px 4px;
+    border-radius: 4px;
+}
+
+.row {
+    display: flex;
+    gap: var(--space-2xl);
+    flex-wrap: wrap;
+}
+
+.sectionTitle {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--space-md);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.9;
+}
+
+.inputGroup {
+    margin-bottom: var(--space-md);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.inputGroup label {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.range {
+    width: 100%;
+    accent-color: var(--accent-primary);
+}
+
+.rangeValue {
+    font-weight: 600;
+    color: var(--accent-primary);
+    text-align: right;
+    font-size: 0.9rem;
+}
+
+.textarea {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: var(--space-sm);
+    border-radius: var(--radius-sm);
+    min-height: 80px;
+    font-family: inherit;
+    resize: vertical;
+}
+
+.saveBtn {
+    background: var(--accent-primary);
+    color: white;
+    padding: 10px 20px;
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: filter 0.2s;
+}
+
+.saveBtn:hover {
+    filter: brightness(1.1);
+}
+
+.cancelBtn {
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 10px 20px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+}
+
+.zonesContainer {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.zoneRow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.zoneName {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    width: 80px;
+    flex-shrink: 0;
+}
+
+.barContainer {
+    flex-grow: 1;
+    height: 8px;
+    background: var(--bg-primary);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.barFill {
+    height: 100%;
+    border-radius: 4px;
+}
+
+.zoneTime {
+    font-size: 0.85rem;
+    font-weight: 600;
+    width: 45px;
+    text-align: right;
+}
+
+/* PR Badges */
+.prList {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-right: var(--space-md);
+}
+
+.prBadge {
+    background: rgba(234, 179, 8, 0.15);
+    color: var(--accent-warning);
+    border: 1px solid rgba(234, 179, 8, 0.3);
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+    animation: bounceIn 0.5s ease;
+}
+
+@keyframes bounceIn {
+    0% {
+        transform: scale(0.8);
+        opacity: 0;
+    }
+
+    70% {
+        transform: scale(1.1);
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}

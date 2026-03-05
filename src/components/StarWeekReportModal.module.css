@@ -1,0 +1,330 @@
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal {
+    background-color: var(--bg-primary);
+    width: 90%;
+    max-width: 900px;
+    height: 90vh;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.header {
+    padding: var(--space-lg);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.titleRow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.closeBtn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: var(--space-xs);
+}
+
+.closeBtn:hover {
+    color: var(--text-primary);
+}
+
+.content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-xl);
+}
+
+.section {
+    margin-bottom: var(--space-2xl);
+    background: var(--bg-secondary);
+    padding: var(--space-lg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.sectionHeader {
+    font-size: 1.25rem;
+    margin-bottom: var(--space-md);
+    color: var(--text-primary);
+    border-left: 4px solid var(--accent-primary);
+    padding-left: var(--space-md);
+}
+
+.description {
+    color: var(--text-secondary);
+    margin-bottom: var(--space-lg);
+}
+
+.workoutListContainer {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.workoutRow {
+    background: var(--bg-primary);
+    padding: var(--space-md);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.workoutRow:hover {
+    border-color: var(--accent-primary);
+    transform: translateY(-2px);
+}
+
+.workoutMainInfo {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-sm);
+}
+
+.workoutTitle {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 1.1rem;
+}
+
+.workoutMeta {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.breakdownBar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: var(--space-xs);
+}
+
+.zonePill {
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: 6px;
+    color: white;
+    font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.statsGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: var(--space-md);
+    margin-bottom: var(--space-xl);
+}
+
+.statCard {
+    background: var(--bg-primary);
+    padding: var(--space-md);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.icon {
+    opacity: 0.8;
+}
+
+.statValue {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
+.statLabel {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.historyCharts {
+    display: flex;
+    gap: var(--space-lg);
+    margin-top: var(--space-lg);
+}
+
+.subChart {
+    flex: 1;
+    background: var(--bg-primary);
+    padding: var(--space-md);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+}
+
+.bigNum {
+    margin-top: var(--space-md);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    margin-bottom: 0.5rem;
+}
+
+.bigNum span {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: var(--accent-primary);
+}
+
+.bigNum small {
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+}
+
+/* Performance Comparison Styles */
+.comparisonGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-md);
+    margin-top: var(--space-md);
+    margin-bottom: var(--space-md);
+}
+
+.comparisonCard {
+    background: var(--bg-primary);
+    padding: var(--space-md);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    text-align: center;
+}
+
+.compLabel {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.compValue {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
+.compDelta {
+    font-size: 0.85rem;
+    margin-top: 4px;
+    font-weight: 600;
+}
+
+.positive {
+    color: #22c55e;
+}
+
+.negative {
+    color: #ef4444;
+}
+
+/* Breakthrough Sessions Styles */
+.breakthroughGrid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    margin-top: var(--space-md);
+}
+
+.breakthroughCard {
+    background: var(--bg-primary);
+    border: 1px solid rgba(255, 215, 0, 0.3);
+    border-left: 4px solid #FFD700;
+    padding: var(--space-md);
+    border-radius: 8px;
+    position: relative;
+    transition: transform 0.2s ease;
+}
+
+.breakthroughCard:hover {
+    transform: translateX(4px);
+    background: rgba(255, 215, 0, 0.05);
+}
+
+.btHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-sm);
+}
+
+.btTitle {
+    font-weight: 600;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+}
+
+.btDate {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.btMetrics {
+    display: flex;
+    gap: var(--space-lg);
+    margin-bottom: var(--space-sm);
+}
+
+.btMetric {
+    display: flex;
+    flex-direction: column;
+}
+
+.btMetricValue {
+    font-weight: bold;
+    color: var(--accent-primary);
+}
+
+.btMetricLabel {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.btHero {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    color: #eab308;
+    background: rgba(234, 179, 8, 0.1);
+    padding: 4px 10px;
+    border-radius: 4px;
+    width: fit-content;
+    font-weight: 500;
+}
