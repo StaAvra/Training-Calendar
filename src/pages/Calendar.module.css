@@ -9,8 +9,6 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    padding-right: var(--space-md);
-    /* Add some breathing room before sidebar */
 }
 
 /* Existing styles preserved below */
@@ -42,7 +40,7 @@
 
 .grid {
     display: grid;
-    grid-template-columns: repeat(7, 1fr);
+    grid-template-columns: repeat(7, 1fr) 220px;
     gap: 1px;
     background-color: var(--border-color);
     /* Creates the grid lines */

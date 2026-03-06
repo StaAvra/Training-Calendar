@@ -145,15 +145,20 @@ const Calendar = () => {
                     {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
                         <div key={day} className={styles.dayHeader}>{day}</div>
                     ))}
+                    <div className={styles.dayHeader}>Summary</div>
 
-                    {calendarDays.map(day => {
+                    {calendarDays.map((day, index) => {
                         const dayWorkouts = getWorkoutsForDay(day);
                         const dayMetrics = getMetricsForDay(day);
                         const isCurrentMonth = isSameMonth(day, monthStart);
                         const isToday = isSameDay(day, new Date());
 
+                        const isLastDayOfWeek = index % 7 === 6;
+                        const weekDays = isLastDayOfWeek ? calendarDays.slice(index - 6, index + 1) : [];
+
                         return (
-                            <div
+                            <React.Fragment key={day.toString()}>
+                                <div
                                 key={day.toString()}
                                 className={`${styles.dayCell} ${!isCurrentMonth ? styles.disabled : ''} ${isToday ? styles.today : ''}`}
                                 onClick={() => handleDayClick(day)}
@@ -183,6 +188,16 @@ const Calendar = () => {
                                     ))}
                                 </div>
                             </div>
+                            {isLastDayOfWeek && (
+                                <WeeklyStats
+                                    weekIndex={Math.floor(index / 7)}
+                                    weekDays={weekDays}
+                                    workouts={workouts}
+                                    metrics={metrics}
+                                    currentUser={currentUser}
+                                />
+                            )}
+                        </React.Fragment>
                         );
                     })}
                 </div>
@@ -215,15 +230,6 @@ const Calendar = () => {
                     currentUser={currentUser}
                 />
             </div>
-
-
-            {/* Sidebar */}
-            <WeeklyStats
-                calendarDays={calendarDays}
-                workouts={workouts}
-                metrics={metrics}
-                currentUser={currentUser}
-            />
         </div>
     );
 };

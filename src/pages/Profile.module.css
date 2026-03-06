@@ -87,3 +87,43 @@
     height: 12px;
     border-radius: 50%;
 }
+
+.integrationRow {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    padding: var(--space-md);
+    border-radius: var(--radius-sm);
+}
+
+.connectBtn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background-color: #fc4c02; /* Strava Orange */
+    color: white;
+    padding: var(--space-xs) var(--space-sm);
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+    text-decoration: none;
+    font-size: 0.875rem;
+    transition: filter 0.2s;
+}
+
+.connectBtn:hover {
+    filter: brightness(1.1);
+}
+
+.connectedBadge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--status-success);
+    font-size: 0.875rem;
+    font-weight: 500;
+    padding: var(--space-xs) var(--space-sm);
+    background-color: rgba(30, 214, 96, 0.1); /* Slight green tint */
+    border-radius: var(--radius-sm);
+}

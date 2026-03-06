@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useUser } from '../context/UserContext';
-import { Save, User, Activity, Heart } from 'lucide-react';
+import { Save, User, Activity, Heart, Link as LinkIcon, CheckCircle } from 'lucide-react';
 import { calculateZones } from '../utils/analysis';
+import { db } from '../utils/db';
 import styles from './Profile.module.css';
 
 const Profile = () => {
@@ -12,12 +13,38 @@ const Profile = () => {
         maxHr: 190,
         lthr: 170
     });
+    const [stravaConnected, setStravaConnected] = useState(false);
 
     const [status, setStatus] = useState('');
 
     useEffect(() => {
         if (currentUser?.profile) {
             setFormData(currentUser.profile);
+        }
+
+        const checkStravaStatus = async () => {
+            const token = await db.getSettings('strava_access_token');
+            if (token) setStravaConnected(true);
+        };
+        checkStravaStatus();
+
+        if (window.electron && window.electron.onStravaAuth) {
+            window.electron.onStravaAuth(async (tokens) => {
+                try {
+                    await db.saveSettings('strava_access_token', tokens.access_token);
+                    await db.saveSettings('strava_refresh_token', tokens.refresh_token);
+                    await db.saveSettings('strava_expires_at', tokens.expires_at);
+                    if (tokens.athlete_id) {
+                        await db.saveSettings('strava_athlete_id', tokens.athlete_id);
+                    }
+                    setStravaConnected(true);
+                    setStatus('Successfully connected to Strava!');
+                    setTimeout(() => setStatus(''), 4000);
+                } catch(err) {
+                    console.error("Failed to save Strava tokens:", err);
+                    setStatus('Failed to save Strava connection.');
+                }
+            });
         }
     }, [currentUser]);
 
@@ -117,9 +144,30 @@ const Profile = () => {
                                 <Save size={18} />
                                 Save Settings
                             </button>
-                            {status && <p className={styles.status}>{status}</p>}
+                            {status && !status.includes('Strava') && <p className={styles.status}>{status}</p>}
                         </div>
                     </form>
+
+                    <div className="card" style={{ marginTop: 'var(--space-xl)' }}>
+                        <h3 className="text-lg" style={{ marginBottom: 'var(--space-md)' }}>Integrations</h3>
+                        <div className={styles.integrationRow}>
+                            <div>
+                                <h4 style={{ margin: 0 }}>Strava</h4>
+                                <p className="text-muted" style={{ fontSize: '0.85rem', margin: '4px 0 0 0' }}>Sync activities and streams automatically.</p>
+                            </div>
+                            {stravaConnected ? (
+                                <div className={styles.connectedBadge}>
+                                    <CheckCircle size={16} /> Connected
+                                </div>
+                            ) : (
+                                // For local development, proxy runs on 3000
+                                <a href="http://localhost:3000/api/strava/login" target="_blank" rel="noreferrer" className={styles.connectBtn}>
+                                    <LinkIcon size={16} /> Connect
+                                </a>
+                            )}
+                        </div>
+                        {status && status.includes('Strava') && <p className={styles.status} style={{marginTop: 'var(--space-sm)'}}>{status}</p>}
+                    </div>
                 </div>
 
                 {/* Zones Preview */}

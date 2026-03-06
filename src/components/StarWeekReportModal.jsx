@@ -558,7 +558,7 @@ const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, curr
                 <div className={styles.header}>
                     <div className={styles.titleRow}>
                         <Trophy size={24} color="#FFD700" fill="#FFD700" />
-                        <h2>Star Period Report v2 (Recovery)</h2>
+                        <h2>Star Period Report</h2>
                     </div>
                     <button onClick={onClose} className={styles.closeBtn}><X size={24} /></button>
                 </div>

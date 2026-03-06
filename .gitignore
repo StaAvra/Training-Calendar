@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+release/
+
+# Strava credentials - NEVER commit these
+backend/.env

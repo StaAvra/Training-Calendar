@@ -8,12 +8,15 @@ import Profile from './pages/Profile';
 import { UserProvider } from './context/UserContext';
 import FutureTraining from './pages/FutureTraining';
 import Simulation from './pages/Simulation';
+import StravaCallback from './pages/StravaCallback';
 
 function App() {
   return (
     <UserProvider>
       <Router>
         <Routes>
+          {/* Standalone Strava OAuth callback - no Layout wrapper */}
+          <Route path="strava-callback" element={<StravaCallback />} />
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="calendar" element={<Calendar />} />

@@ -82,3 +82,22 @@
         transform: rotate(360deg);
     }
 }
+
+.stravaSyncBtn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background-color: #fc4c02;
+    color: white;
+    padding: var(--space-xs) var(--space-md);
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    font-weight: 600;
+    transition: filter 0.2s;
+    border: none;
+    cursor: pointer;
+}
+
+.stravaSyncBtn:hover {
+    filter: brightness(1.1);
+}
