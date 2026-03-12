@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { subWeeks, startOfDay, startOfWeek, endOfWeek, format } from 'date-fns';
 import { useUser } from '../context/UserContext';
 import { db } from '../utils/db';
-import { calculateTimeInZones, calculateZones, calculateEstimatedFtp, calculateCriticalPower, calculateCriticalHeartRate, calculatePhenotype, calculateSessionDerivedFtp, checkFtpImprovement, calculateTssWithMetadata, calculateTimeInHRZones, calculateHRZones, calculateInterpolatedScore } from '../utils/analysis';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, ReferenceLine, Area, Legend, ComposedChart } from 'recharts';
+import { calculateTimeInZones, calculateZones, calculateEstimatedFtp, calculateCriticalPower, calculateCriticalHeartRate, calculatePhenotype, calculateSessionDerivedFtp, checkFtpImprovement, calculateTssWithMetadata, calculateTimeInHRZones, calculateHRZones, calculateInterpolatedScore, calculateTrainingDNA } from '../utils/analysis';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, ReferenceLine, Area, Legend, ComposedChart, AreaChart } from 'recharts';
 import { Activity, TrendingUp, Calculator, Zap, Heart } from 'lucide-react';
 import Modal from '../components/Modal'; // Reuse Modal
 import styles from './Analysis.module.css';
@@ -13,6 +13,7 @@ const Analysis = () => {
     const [workouts, setWorkouts] = useState([]);
     const [zoneData, setZoneData] = useState([]);
     const [hrZoneData, setHrZoneData] = useState([]);
+    const [dnaData, setDnaData] = useState(null);
     const [loading, setLoading] = useState(true);
 
     // Power Curve & CP State
@@ -156,6 +157,12 @@ const Analysis = () => {
 
         const finalHrZoneData = aggregatedHrZones.map(z => ({ ...z, time: Number(z.time.toFixed(1)) }));
         setHrZoneData(finalHrZoneData);
+
+        // Training DNA (stacked area chart)
+        db.getMetrics(currentUser.id).then(metricsData => {
+            const dna = calculateTrainingDNA(workouts, metricsData || [], currentUser.profile?.ftp);
+            setDnaData(dna);
+        });
 
         // Calculate HR-based TSS estimates for workouts without power data
         const hrBasedEstimates = [];
@@ -949,32 +956,35 @@ const Analysis = () => {
                         </div>
                     </div>
 
-                    {/* Heart Rate Time in Zones Chart */}
-                    <div className="card" style={{ gridColumn: '1 / -1' }}>
-                        <div className={styles.cardHeader}>
-                            <h3 className="text-lg">Heart Rate Zones (Last 4 Weeks)</h3>
-                            <span className="text-sm text-muted">Minutes spent in each HR zone</span>
+                    {/* Training DNA - Stacked Area Chart */}
+                    {dnaData?.weeklyTrends?.length > 0 && (
+                        <div className="card" style={{ gridColumn: '1 / -1' }}>
+                            <div className={styles.cardHeader}>
+                                <h3 className="text-lg">Training Distribution (Last 12 Weeks)</h3>
+                                <span className="text-sm text-muted">Weekly workout count by intensity zone</span>
+                            </div>
+                            <div style={{ height: '280px', width: '100%' }}>
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={dnaData.weeklyTrends} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                                        <XAxis dataKey="weekLabel" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
+                                        <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} label={{ value: 'Sessions', angle: -90, position: 'insideLeft', fill: 'var(--text-secondary)' }} />
+                                        <Tooltip
+                                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+                                            itemStyle={{ color: 'var(--text-primary)' }}
+                                        />
+                                        <Legend wrapperStyle={{ paddingTop: '10px' }} />
+                                        <Area type="monotone" dataKey="Recovery" stackId="1" stroke="#888888" fill="#888888" fillOpacity={0.8} />
+                                        <Area type="monotone" dataKey="Endurance" stackId="1" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.8} />
+                                        <Area type="monotone" dataKey="Tempo" stackId="1" stroke="#22c55e" fill="#22c55e" fillOpacity={0.8} />
+                                        <Area type="monotone" dataKey="Threshold" stackId="1" stroke="#eab308" fill="#eab308" fillOpacity={0.8} />
+                                        <Area type="monotone" dataKey="VO2Max" stackId="1" stroke="#f97316" fill="#f97316" fillOpacity={0.8} />
+                                        <Area type="monotone" dataKey="Anaerobic" stackId="1" stroke="#ef4444" fill="#ef4444" fillOpacity={0.8} />
+                                    </AreaChart>
+                                </ResponsiveContainer>
+                            </div>
                         </div>
-                        <div style={{ height: '250px', width: '100%' }}>
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={hrZoneData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
-                                    <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
-                                    <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
-                                    <Tooltip
-                                        contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                                        itemStyle={{ color: 'var(--text-primary)' }}
-                                        cursor={{ fill: 'var(--bg-tertiary)' }}
-                                    />
-                                    <Bar dataKey="time" radius={[4, 4, 0, 0]}>
-                                        {hrZoneData.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={entry.color} />
-                                        ))}
-                                    </Bar>
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </div>
-                    </div>
+                    )}
 
                 </div>
             )}

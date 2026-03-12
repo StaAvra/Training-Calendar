@@ -921,6 +921,7 @@ export const classifyWorkout = (workout, ftp) => {
     // Time accumulators (based on classified intervals)
     let totalTempoTime = 0;
     let totalThresholdTime = 0;
+    let shortHighIntensityCount = 0; // Micro-intervals (15-120s at VO2max+ power)
 
     detectedIntervals.forEach(iv => {
         const ap = iv.avgPower;
@@ -933,6 +934,9 @@ export const classifyWorkout = (workout, ftp) => {
             if (dur >= 30 && dur <= 180) { // 30s - 3m
                 anaerobicCount++;
                 type = 'Anaerobic';
+            } else if (dur >= 15 && dur < 30) {
+                shortHighIntensityCount++;
+                type = 'Anaerobic';
             } else if (dur > 180) { // Long blocks at anaerobic power count as VO2Max/Threshold 
                 vo2Count++;
                 type = 'VO2Max';
@@ -942,6 +946,9 @@ export const classifyWorkout = (workout, ftp) => {
         else if (ap >= zones[4].min) {
             if (dur >= 120 && dur <= 480) { // 2m - 8m
                 vo2Count++;
+                type = 'VO2Max';
+            } else if (dur >= 15 && dur < 120) { // Short VO2max bursts (micro-intervals)
+                shortHighIntensityCount++;
                 type = 'VO2Max';
             } else if (dur > 480) { // Very long VO2 effort is Threshold
                 thresholdCount++;
@@ -967,20 +974,30 @@ export const classifyWorkout = (workout, ftp) => {
         }
     });
 
+    // --- Aggregate High-Intensity Zone Time ---
+    // Total raw seconds at VO2max power or above (Z5 + Z6 + Z7)
+    const highIntensityTime = (timeInZones.VO2Max || 0) + (timeInZones.Anaerobic || 0);
+
     // --- Final Classification Logic ---
 
     // Priority 1: High Intensity
     if (anaerobicCount >= 5) return 'Anaerobic';
     if (vo2Count >= 3) return 'VO2Max';
 
+    // Priority 1b: Micro-interval VO2max sessions (e.g. 30/30, 40/20, Tabata)
+    // Many short bursts at VO2max+ power, OR significant raw time in VO2max+ zones
+    if (shortHighIntensityCount >= 6) return 'VO2Max';
+    if (highIntensityTime >= 600 && highIntensityTime > timeInZones.Tempo + timeInZones.Threshold) return 'VO2Max';
+    if (highIntensityTime >= 480 && shortHighIntensityCount >= 3) return 'VO2Max';
+
     // Priority 2: Threshold
     // > 2 intervals OR > 15m time in identified threshold blocks
-    // NEW: OR > 20m raw time in Z4 AND Z4 time > Z3 time (to distinguish from hard tempo)
+    // OR > 20m raw time in Z4 AND Z4 time > Z3 time (to distinguish from hard tempo)
     if (thresholdCount >= 2 || totalThresholdTime >= 900 || (timeInZones.Threshold >= 1200 && timeInZones.Threshold > timeInZones.Tempo)) return 'Threshold';
 
     // Priority 3: Tempo
     // > 1 interval OR > 30m time in identified tempo blocks
-    // NEW: OR > 30m raw time in Z3
+    // OR > 30m raw time in Z3
     if (tempoCount >= 1 || totalTempoTime >= 1800 || timeInZones.Tempo >= 1800) return 'Tempo';
 
     // Priority 4: IF Validation check
@@ -1067,13 +1084,13 @@ export const calculateTrainingDNA = (workouts, metrics, ftp) => {
         if (weeklyTrends.length >= 12) break; // Limit to 12 weeks
     }
 
-    // --- Calculate Trends ---
-    const zones = ['Recovery', 'Endurance', 'Tempo', 'Threshold', 'VO2Max', 'Anaerobic'];
-    zones.forEach(zone => {
+    // --- Calculate Rolling Averages (3-week window) ---
+    const zoneNames = ['Recovery', 'Endurance', 'Tempo', 'Threshold', 'VO2Max', 'Anaerobic'];
+    zoneNames.forEach(zone => {
         const values = weeklyTrends.map(w => w[zone] || 0);
-        const trendValues = calculateLinearTrend(values);
+        const rollingValues = calculateRollingAverage(values, 3);
         weeklyTrends.forEach((w, i) => {
-            w[`${zone}Trend`] = trendValues[i];
+            w[`${zone}Rolling`] = rollingValues[i];
         });
     });
 
@@ -1161,23 +1178,26 @@ export const calculateTrainingDNA = (workouts, metrics, ftp) => {
 };
 
 /**
- * Calculates a linear trend line (y = mx + b) for a given array of numbers.
- * Returns an array of y-values representing the best-fit line.
+ * Calculates a centered rolling average for a given array of numbers.
+ * @param {number[]} values - Input values
+ * @param {number} window - Window size (default 3)
+ * @returns {number[]} Rolling average values (null where insufficient data)
  */
-const calculateLinearTrend = (yValues) => {
-    const n = yValues.length;
+const calculateRollingAverage = (values, window = 3) => {
+    const n = values.length;
     if (n === 0) return [];
-    if (n === 1) return [yValues[0]];
-
-    const xValues = Array.from({ length: n }, (_, i) => i);
-
-    const sumX = xValues.reduce((a, b) => a + b, 0);
-    const sumY = yValues.reduce((a, b) => a + b, 0);
-    const sumXY = xValues.reduce((a, i) => a + (i * yValues[i]), 0);
-    const sumXX = xValues.reduce((a, i) => a + (i * i), 0);
-
-    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-    const intercept = (sumY - slope * sumX) / n;
-
-    return xValues.map(x => slope * x + intercept);
+    const result = [];
+    const half = Math.floor(window / 2);
+    for (let i = 0; i < n; i++) {
+        const start = Math.max(0, i - half);
+        const end = Math.min(n - 1, i + half);
+        let sum = 0;
+        let count = 0;
+        for (let j = start; j <= end; j++) {
+            sum += values[j];
+            count++;
+        }
+        result.push(Number((sum / count).toFixed(2)));
+    }
+    return result;
 };

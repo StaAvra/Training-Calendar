@@ -157,7 +157,7 @@ const FutureTraining = () => {
                     {dnaData ? (
                         <div className={styles.dnaContent}>
                             <p className="text-sm text-muted" style={{ marginBottom: '1.5rem' }}>
-                                12-week workout distribution trends:
+                                12-week workout distribution (3-week rolling average):
                             </p>
 
                             <div style={{ width: '100%', height: 300, marginBottom: '2rem' }}>
@@ -165,19 +165,19 @@ const FutureTraining = () => {
                                     <LineChart data={dnaData.weeklyTrends}>
                                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                                         <XAxis dataKey="weekLabel" stroke="var(--text-secondary)" fontSize={12} />
-                                        <YAxis stroke="var(--text-secondary)" fontSize={12} label={{ value: 'Rides (Trend)', angle: -90, position: 'insideLeft', fill: 'var(--text-secondary)' }} />
+                                        <YAxis stroke="var(--text-secondary)" fontSize={12} label={{ value: 'Rides (Avg)', angle: -90, position: 'insideLeft', fill: 'var(--text-secondary)' }} />
                                         <Tooltip
                                             contentStyle={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
                                             itemStyle={{ color: 'var(--text-primary)' }}
-                                            formatter={(value, name) => [typeof value === 'number' ? value.toFixed(1) : value, name.replace('Trend', '')]}
+                                            formatter={(value, name) => [typeof value === 'number' ? value.toFixed(1) : value, name]}
                                         />
                                         <Legend wrapperStyle={{ paddingTop: '10px' }} />
-                                        <Line type="monotone" dataKey="RecoveryTrend" name="Recovery" stroke="#888888" strokeWidth={3} dot={false} />
-                                        <Line type="monotone" dataKey="EnduranceTrend" name="Endurance" stroke="#3b82f6" strokeWidth={3} dot={false} />
-                                        <Line type="monotone" dataKey="TempoTrend" name="Tempo" stroke="#22c55e" strokeWidth={3} dot={false} />
-                                        <Line type="monotone" dataKey="ThresholdTrend" name="Threshold" stroke="#eab308" strokeWidth={3} dot={false} />
-                                        <Line type="monotone" dataKey="VO2MaxTrend" name="VO2Max" stroke="#f97316" strokeWidth={3} dot={false} />
-                                        <Line type="monotone" dataKey="AnaerobicTrend" name="Anaerobic" stroke="#ef4444" strokeWidth={3} dot={false} />
+                                        <Line type="monotone" dataKey="RecoveryRolling" name="Recovery" stroke="#888888" strokeWidth={2} dot={{ r: 2 }} />
+                                        <Line type="monotone" dataKey="EnduranceRolling" name="Endurance" stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
+                                        <Line type="monotone" dataKey="TempoRolling" name="Tempo" stroke="#22c55e" strokeWidth={2} dot={{ r: 2 }} />
+                                        <Line type="monotone" dataKey="ThresholdRolling" name="Threshold" stroke="#eab308" strokeWidth={2} dot={{ r: 2 }} />
+                                        <Line type="monotone" dataKey="VO2MaxRolling" name="VO2Max" stroke="#f97316" strokeWidth={2} dot={{ r: 2 }} />
+                                        <Line type="monotone" dataKey="AnaerobicRolling" name="Anaerobic" stroke="#ef4444" strokeWidth={2} dot={{ r: 2 }} />
                                     </LineChart>
                                 </ResponsiveContainer>
                             </div>
