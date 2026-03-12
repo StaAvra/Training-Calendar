@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { subWeeks, startOfDay } from 'date-fns';
+import { subWeeks, startOfDay, startOfWeek, endOfWeek, format } from 'date-fns';
 import { useUser } from '../context/UserContext';
 import { db } from '../utils/db';
 import { calculateTimeInZones, calculateZones, calculateEstimatedFtp, calculateCriticalPower, calculateCriticalHeartRate, calculatePhenotype, calculateSessionDerivedFtp, checkFtpImprovement, calculateTssWithMetadata, calculateTimeInHRZones, calculateHRZones, calculateInterpolatedScore } from '../utils/analysis';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, ReferenceLine } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, ReferenceLine, Area, Legend, ComposedChart } from 'recharts';
 import { Activity, TrendingUp, Calculator, Zap, Heart } from 'lucide-react';
 import Modal from '../components/Modal'; // Reuse Modal
 import styles from './Analysis.module.css';
@@ -23,6 +23,8 @@ const Analysis = () => {
     const [sessionDerivedFtp, setSessionDerivedFtp] = useState(null);
     const [efData, setEfData] = useState([]);
     const [allTimeEfData, setAllTimeEfData] = useState([]);
+    const [multiTrendData, setMultiTrendData] = useState([]);
+    const [baselineTrendData, setBaselineTrendData] = useState([]);
 
     // FTP Modal State
     const [isFtpModalOpen, setIsFtpModalOpen] = useState(false);
@@ -221,6 +223,129 @@ const Analysis = () => {
         } catch (e) {
             setFtpSuggestion(null);
         }
+
+        // === Multi-Metric Weekly Trend (last 6 weeks) ===
+        (async () => {
+            try {
+                const metrics = await db.getMetrics(currentUser.id);
+                const weeks = [];
+                for (let i = 5; i >= 0; i--) {
+                    const weekStart = startOfWeek(subWeeks(now, i), { weekStartsOn: 1 });
+                    const weekEnd = endOfWeek(subWeeks(now, i), { weekStartsOn: 1 });
+                    weeks.push({ start: weekStart, end: weekEnd, label: format(weekStart, 'MMM d') });
+                }
+
+                const trendPoints = weeks.map(week => {
+                    // Metrics (HRV & Sleep) for this week
+                    const weekMetrics = metrics.filter(m => {
+                        const d = new Date(m.date);
+                        return d >= week.start && d <= week.end;
+                    });
+                    const avgHrv = weekMetrics.length > 0
+                        ? weekMetrics.reduce((s, m) => s + (m.hrv || 0), 0) / weekMetrics.filter(m => m.hrv).length
+                        : null;
+                    const avgSleep = weekMetrics.length > 0
+                        ? weekMetrics.reduce((s, m) => s + (m.sleepQuality || 0), 0) / weekMetrics.filter(m => m.sleepQuality).length
+                        : null;
+
+                    // Power bests for this week
+                    const weekWorkouts = workouts.filter(w => {
+                        const d = new Date(w.date);
+                        return d >= week.start && d <= week.end;
+                    });
+                    const weekBests = { duration_1m: 0, duration_3m: 0, duration_5m: 0, duration_20m: 0 };
+                    weekWorkouts.forEach(w => {
+                        if (w.power_curve) {
+                            Object.keys(weekBests).forEach(k => {
+                                if ((w.power_curve[k] || 0) > weekBests[k]) weekBests[k] = w.power_curve[k];
+                            });
+                        }
+                    });
+
+                    // CP for this week (needs 3m and 20m)
+                    const weekCp = calculateCriticalPower(weekBests);
+
+                    return {
+                        week: week.label,
+                        rawHrv: avgHrv ? Math.round(avgHrv) : null,
+                        rawSleep: avgSleep ? Math.round(avgSleep) : null,
+                        rawCp: weekCp ? weekCp.cp : null,
+                        rawCpLow: weekCp ? weekCp.low : null,
+                        rawCpHigh: weekCp ? weekCp.high : null,
+                        raw1m: weekBests.duration_1m || null,
+                        raw5m: weekBests.duration_5m || null,
+                        raw20m: weekBests.duration_20m || null,
+                    };
+                });
+
+                // Normalize each series to 0-100 based on its min/max across all weeks
+                const keys = ['rawHrv', 'rawSleep', 'rawCp', 'raw1m', 'raw5m', 'raw20m'];
+                const ranges = {};
+                keys.forEach(k => {
+                    const vals = trendPoints.map(p => p[k]).filter(v => v != null);
+                    if (vals.length > 0) {
+                        const min = Math.min(...vals);
+                        const max = Math.max(...vals);
+                        ranges[k] = { min, max, span: max - min || 1 };
+                    }
+                });
+
+                const normalize = (val, key) => {
+                    if (val == null || !ranges[key]) return null;
+                    // Add 10% padding so lines don't sit at 0 or 100
+                    return Math.round(((val - ranges[key].min) / ranges[key].span) * 80 + 10);
+                };
+
+                // Also normalize CP range band
+                const normalizedData = trendPoints.map(p => ({
+                    week: p.week,
+                    hrv: normalize(p.rawHrv, 'rawHrv'),
+                    sleep: normalize(p.rawSleep, 'rawSleep'),
+                    cp: normalize(p.rawCp, 'rawCp'),
+                    cpRange: (p.rawCpLow != null && p.rawCpHigh != null && ranges.rawCp)
+                        ? [normalize(p.rawCpLow, 'rawCp'), normalize(p.rawCpHigh, 'rawCp')]
+                        : null,
+                    p1m: normalize(p.raw1m, 'raw1m'),
+                    p5m: normalize(p.raw5m, 'raw5m'),
+                    p20m: normalize(p.raw20m, 'raw20m'),
+                    // Keep raw values for tooltip
+                    _rawHrv: p.rawHrv, _rawSleep: p.rawSleep, _rawCp: p.rawCp,
+                    _rawCpLow: p.rawCpLow, _rawCpHigh: p.rawCpHigh,
+                    _raw1m: p.raw1m, _raw5m: p.raw5m, _raw20m: p.raw20m,
+                }));
+
+                setMultiTrendData(normalizedData);
+
+                // Approach 2: % Change from Baseline (Week 1)
+                const baselineKeys = ['rawHrv', 'rawSleep', 'rawCp', 'raw1m', 'raw5m', 'raw20m'];
+                const baselines = {};
+                baselineKeys.forEach(k => {
+                    const first = trendPoints.find(p => p[k] != null);
+                    if (first) baselines[k] = first[k];
+                });
+
+                const pctChange = (val, key) => {
+                    if (val == null || !baselines[key]) return null;
+                    return Number((((val - baselines[key]) / baselines[key]) * 100).toFixed(1));
+                };
+
+                const baselineData = trendPoints.map(p => ({
+                    week: p.week,
+                    hrv: pctChange(p.rawHrv, 'rawHrv'),
+                    sleep: pctChange(p.rawSleep, 'rawSleep'),
+                    cp: pctChange(p.rawCp, 'rawCp'),
+                    p1m: pctChange(p.raw1m, 'raw1m'),
+                    p5m: pctChange(p.raw5m, 'raw5m'),
+                    p20m: pctChange(p.raw20m, 'raw20m'),
+                    _rawHrv: p.rawHrv, _rawSleep: p.rawSleep, _rawCp: p.rawCp,
+                    _rawCpLow: p.rawCpLow, _rawCpHigh: p.rawCpHigh,
+                    _raw1m: p.raw1m, _raw5m: p.raw5m, _raw20m: p.raw20m,
+                }));
+                setBaselineTrendData(baselineData);
+            } catch (e) {
+                console.error('Multi-trend aggregation error:', e);
+            }
+        })();
 
     }, [workouts, currentUser]);
 
@@ -551,6 +676,130 @@ const Analysis = () => {
                             ) : (
                                 <div className="flex-center" style={{ height: '100%', color: 'var(--text-muted)' }}>
                                     Need more aerobic rides (IF ≤ 0.75, ≥ 30min) to show trend.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Multi-Metric Normalized Trend (Last 6 Weeks) */}
+                    <div className="card" style={{ gridColumn: '1 / -1' }}>
+                        <div className={styles.cardHeader}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <h3 className="text-lg">Performance & Recovery Trend (Last 6 Weeks)</h3>
+                                <div title="All parameters are normalized to 0–100% of their own range so they can be compared on one chart. Hover for actual values." style={{ cursor: 'help', fontSize: '0.9em', opacity: 0.7 }}>ℹ️</div>
+                            </div>
+                            <span className="text-sm text-muted">Normalized view — hover for real values</span>
+                        </div>
+                        <div style={{ height: '320px', width: '100%' }}>
+                            {multiTrendData.length > 0 && multiTrendData.some(d => d.hrv || d.sleep || d.cp || d.p1m || d.p5m || d.p20m) ? (
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <ComposedChart data={multiTrendData} margin={{ top: 10, right: 30, left: 10, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                                        <XAxis dataKey="week" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
+                                        <YAxis domain={[0, 100]} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}%`} />
+                                        <Tooltip
+                                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', fontSize: '13px' }}
+                                            cursor={{ stroke: 'var(--border-color)', strokeWidth: 1 }}
+                                            content={({ active, payload, label }) => {
+                                                if (!active || !payload?.length) return null;
+                                                const d = payload[0]?.payload;
+                                                if (!d) return null;
+                                                return (
+                                                    <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px 14px', fontSize: '13px' }}>
+                                                        <p style={{ fontWeight: 600, marginBottom: '6px' }}>Week of {label}</p>
+                                                        {d._rawHrv != null && <p style={{ color: '#a78bfa' }}>HRV: {d._rawHrv} ms</p>}
+                                                        {d._rawSleep != null && <p style={{ color: '#38bdf8' }}>Sleep Score: {d._rawSleep}</p>}
+                                                        {d._rawCp != null && <p style={{ color: '#f59e0b' }}>CP: {d._rawCp}W ({d._rawCpLow}–{d._rawCpHigh}W)</p>}
+                                                        {d._raw1m != null && <p style={{ color: '#ef4444' }}>1min Power: {d._raw1m}W</p>}
+                                                        {d._raw5m != null && <p style={{ color: '#22c55e' }}>5min Power: {d._raw5m}W</p>}
+                                                        {d._raw20m != null && <p style={{ color: '#3b82f6' }}>20min Power: {d._raw20m}W</p>}
+                                                    </div>
+                                                );
+                                            }}
+                                        />
+                                        <Legend
+                                            wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }}
+                                            formatter={(value) => <span style={{ color: 'var(--text-secondary)' }}>{value}</span>}
+                                        />
+                                        {/* CP probability range (shaded band) */}
+                                        <Area
+                                            type="monotone"
+                                            dataKey="cpRange"
+                                            name="CP Range"
+                                            fill="#f59e0b"
+                                            fillOpacity={0.15}
+                                            stroke="none"
+                                            connectNulls
+                                            legendType="none"
+                                        />
+                                        <Line type="monotone" dataKey="hrv" name="HRV" stroke="#a78bfa" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                                        <Line type="monotone" dataKey="sleep" name="Sleep" stroke="#38bdf8" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                                        <Line type="monotone" dataKey="cp" name="CP" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                                        <Line type="monotone" dataKey="p1m" name="1min" stroke="#ef4444" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" connectNulls />
+                                        <Line type="monotone" dataKey="p5m" name="5min" stroke="#22c55e" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" connectNulls />
+                                        <Line type="monotone" dataKey="p20m" name="20min" stroke="#3b82f6" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" connectNulls />
+                                    </ComposedChart>
+                                </ResponsiveContainer>
+                            ) : (
+                                <div className="flex-center" style={{ height: '100%', color: 'var(--text-muted)' }}>
+                                    Need workout and daily metric data to show trends.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* % Change from Baseline Trend (Last 6 Weeks) */}
+                    <div className="card" style={{ gridColumn: '1 / -1' }}>
+                        <div className={styles.cardHeader}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <h3 className="text-lg">% Change from Baseline (Last 6 Weeks)</h3>
+                                <div title="Shows how each parameter changed relative to the first week with data. 0% = no change from baseline. Positive = improvement (for power/CP) or increase (for HRV/sleep)." style={{ cursor: 'help', fontSize: '0.9em', opacity: 0.7 }}>ℹ️</div>
+                            </div>
+                            <span className="text-sm text-muted">All values relative to first available week</span>
+                        </div>
+                        <div style={{ height: '320px', width: '100%' }}>
+                            {baselineTrendData.length > 0 && baselineTrendData.some(d => d.hrv != null || d.sleep != null || d.cp != null || d.p1m != null || d.p5m != null || d.p20m != null) ? (
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <ComposedChart data={baselineTrendData} margin={{ top: 10, right: 30, left: 10, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                                        <XAxis dataKey="week" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
+                                        <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `${v > 0 ? '+' : ''}${v}%`} />
+                                        <ReferenceLine y={0} stroke="var(--text-muted)" strokeDasharray="3 3" />
+                                        <Tooltip
+                                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', fontSize: '13px' }}
+                                            cursor={{ stroke: 'var(--border-color)', strokeWidth: 1 }}
+                                            content={({ active, payload, label }) => {
+                                                if (!active || !payload?.length) return null;
+                                                const d = payload[0]?.payload;
+                                                if (!d) return null;
+                                                return (
+                                                    <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px 14px', fontSize: '13px' }}>
+                                                        <p style={{ fontWeight: 600, marginBottom: '6px' }}>Week of {label}</p>
+                                                        {d.hrv != null && <p style={{ color: '#a78bfa' }}>HRV: {d.hrv > 0 ? '+' : ''}{d.hrv}% ({d._rawHrv} ms)</p>}
+                                                        {d.sleep != null && <p style={{ color: '#38bdf8' }}>Sleep: {d.sleep > 0 ? '+' : ''}{d.sleep}% ({d._rawSleep})</p>}
+                                                        {d.cp != null && <p style={{ color: '#f59e0b' }}>CP: {d.cp > 0 ? '+' : ''}{d.cp}% ({d._rawCp}W)</p>}
+                                                        {d.p1m != null && <p style={{ color: '#ef4444' }}>1min: {d.p1m > 0 ? '+' : ''}{d.p1m}% ({d._raw1m}W)</p>}
+                                                        {d.p5m != null && <p style={{ color: '#22c55e' }}>5min: {d.p5m > 0 ? '+' : ''}{d.p5m}% ({d._raw5m}W)</p>}
+                                                        {d.p20m != null && <p style={{ color: '#3b82f6' }}>20min: {d.p20m > 0 ? '+' : ''}{d.p20m}% ({d._raw20m}W)</p>}
+                                                    </div>
+                                                );
+                                            }}
+                                        />
+                                        <Legend
+                                            wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }}
+                                            formatter={(value) => <span style={{ color: 'var(--text-secondary)' }}>{value}</span>}
+                                        />
+                                        <Line type="monotone" dataKey="hrv" name="HRV" stroke="#a78bfa" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                                        <Line type="monotone" dataKey="sleep" name="Sleep" stroke="#38bdf8" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                                        <Line type="monotone" dataKey="cp" name="CP" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                                        <Line type="monotone" dataKey="p1m" name="1min" stroke="#ef4444" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" connectNulls />
+                                        <Line type="monotone" dataKey="p5m" name="5min" stroke="#22c55e" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" connectNulls />
+                                        <Line type="monotone" dataKey="p20m" name="20min" stroke="#3b82f6" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" connectNulls />
+                                    </ComposedChart>
+                                </ResponsiveContainer>
+                            ) : (
+                                <div className="flex-center" style={{ height: '100%', color: 'var(--text-muted)' }}>
+                                    Need workout and daily metric data to show baseline trends.
                                 </div>
                             )}
                         </div>

@@ -15,10 +15,13 @@ const StravaCallback = () => {
             const expiresAt = searchParams.get('expires_at');
             const athleteId = searchParams.get('athlete_id');
 
+            console.log('StravaCallback received:', { accessToken: !!accessToken, refreshToken: !!refreshToken, expiresAt, athleteId });
+
             if (!accessToken) {
                 setIsError(true);
                 setMessage('Connection failed: no token received. Please try again.');
-                setTimeout(() => navigate('/'), 3000);
+                console.error('No access token in callback params');
+                setTimeout(() => navigate('/profile'), 3000);
                 return;
             }
 
@@ -29,12 +32,14 @@ const StravaCallback = () => {
                 if (athleteId) {
                     await db.saveSettings('strava_athlete_id', athleteId);
                 }
+                
+                console.log('Strava tokens saved successfully');
                 setMessage('Strava connected successfully! Redirecting...');
                 setTimeout(() => navigate('/profile'), 2000);
             } catch (err) {
                 console.error('Failed to save Strava tokens:', err);
                 setIsError(true);
-                setMessage('Failed to save connection. Please try again.');
+                setMessage(`Failed to save connection: ${err.message}. Please try again.`);
                 setTimeout(() => navigate('/profile'), 3000);
             }
         };

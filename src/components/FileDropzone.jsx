@@ -2,7 +2,7 @@ import React, { useCallback, useState, useEffect } from 'react';
 import { useUser } from '../context/UserContext';
 import { Upload, FileCheck, CircleAlert, RefreshCw } from 'lucide-react';
 import { parseFitFile } from '../utils/fitParser';
-import { fetchStravaActivities, fetchStravaStreams } from '../utils/stravaApi';
+import { fetchStravaActivities, fetchStravaStreams, testProxyConnection } from '../utils/stravaApi';
 import { db } from '../utils/db';
 import styles from './FileDropzone.module.css';
 
@@ -97,19 +97,50 @@ const FileDropzone = ({ onUploadComplete }) => {
         if (!currentUser) return;
         setIsProcessing(true);
         setStatus(null);
-        setMessage('Fetching new Strava activities...');
+        setMessage('Testing backend connection...');
 
         try {
-            // Get last sync date or 7 days ago
+            // First, test if backend is reachable
+            const connTest = await testProxyConnection();
+            if (!connTest.ok) {
+                setStatus('error');
+                setMessage(`Cannot reach backend at ${connTest.url}. Make sure the backend server is running and the URL is correct. (${connTest.error || `Status: ${connTest.status}`})`);
+                setIsProcessing(false);
+                return;
+            }
+
+            setMessage('Fetching new Strava activities...');
+
+            // Only sync activities from the current moment onward (no backfill)
+            // This prevents duplicates with manually uploaded .fit files
             let lastSync = await db.getSettings('strava_last_sync');
-            if (!lastSync) lastSync = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
+            if (!lastSync) lastSync = Math.floor(Date.now() / 1000);
+
+            console.log('Starting Strava sync, last sync:', new Date(lastSync * 1000).toISOString());
 
             const activities = await fetchStravaActivities(lastSync);
             
             if (!activities || activities.length === 0) {
                 setStatus('success');
-                setMessage('No new activities found.');
-                // Update sync time anyway
+                setMessage('No new activities found on Strava.');
+                console.log('No new activities from Strava');
+                await db.saveSettings('strava_last_sync', Math.floor(Date.now() / 1000));
+                setIsProcessing(false);
+                return;
+            }
+
+            // Only sync cycling activities
+            const cyclingTypes = ['Ride', 'VirtualRide', 'EBikeRide', 'Handcycle', 'Velomobile'];
+            const rides = activities.filter(a => cyclingTypes.includes(a.type));
+            const skippedTypes = [...new Set(activities.filter(a => !cyclingTypes.includes(a.type)).map(a => a.type))];
+            console.log(`Found ${activities.length} activities total, ${rides.length} cycling, skipped types: ${skippedTypes.join(', ') || 'none'}`);
+
+            if (rides.length === 0) {
+                setStatus('success');
+                const msg = activities.length > 0
+                    ? `Found ${activities.length} activities but none are cycling (found: ${skippedTypes.join(', ')}).`
+                    : 'No new activities found on Strava.';
+                setMessage(msg);
                 await db.saveSettings('strava_last_sync', Math.floor(Date.now() / 1000));
                 setIsProcessing(false);
                 return;
@@ -118,25 +149,31 @@ const FileDropzone = ({ onUploadComplete }) => {
             let newCount = 0;
             const existingWorkouts = await db.getWorkouts(currentUser.id);
 
-            for (const activity of activities) {
+            for (const activity of rides) {
                 // Check if already synced via strava OR fits the same date
                 const isDuplicate = existingWorkouts.some(w => 
                     w.strava_id === activity.id || 
                     (new Date(w.start_time).getTime() === new Date(activity.start_date).getTime())
                 );
 
-                if (isDuplicate) continue;
+                if (isDuplicate) {
+                    console.log(`Skipping duplicate activity: ${activity.name}`);
+                    continue;
+                }
 
                 setMessage(`Fetching streams for ${activity.name}...`);
                 const streamSet = await fetchStravaStreams(activity.id);
 
+                let formattedStreams = [];
+                let avgPower = 0;
+                let maxPower = 0;
+
                 if (streamSet && streamSet.length > 0) {
-                    // Convert StreamSet (array of specific type objects) to Array of Objects (time, power, hr, etc)
+                    // Convert StreamSet (array of specific type objects) to Array of Objects
                     const streamsData = {};
                     streamSet.forEach(s => { streamsData[s.type] = s.data; });
                     
                     const timeArr = streamsData.time || [];
-                    const formattedStreams = [];
                     
                     for (let i = 0; i < timeArr.length; i++) {
                         formattedStreams.push({
@@ -149,41 +186,39 @@ const FileDropzone = ({ onUploadComplete }) => {
                         });
                     }
 
-                    // Calculate basic metrics from streams if missing
-                    const avgPower = streamsData.watts ? streamsData.watts.reduce((a,b)=>a+b,0)/streamsData.watts.length : 0;
-                    const maxPower = streamsData.watts ? Math.max(...streamsData.watts) : 0;
-
-                    // Manual NP calc since we don't have fitParser context here easily without importing calculateNormalizedPower
-                    // For now, save raw streams. fitParser logic handles metrics on load or we can extract NP logic later.
-                    
-                    const workout = {
-                        userId: currentUser.id,
-                        title: activity.name,
-                        date: new Date(activity.start_date).toISOString(),
-                        source: 'strava_api',
-                        strava_id: activity.id,
-                        imported_at: new Date().toISOString(),
-                        start_time: new Date(activity.start_date).toISOString(),
-                        total_elapsed_time: activity.elapsed_time,
-                        total_distance: activity.distance,
-                        avg_speed: activity.average_speed,
-                        avg_power: activity.average_watts || avgPower || 0,
-                        max_power: activity.max_watts || maxPower || 0,
-                        avg_heart_rate: activity.average_heartrate || 0,
-                        max_heart_rate: activity.max_heartrate || 0,
-                        normalized_power: activity.weighted_average_watts || activity.average_watts, // Strava NP equivalent
-                        total_work: activity.kilojoules ? activity.kilojoules * 1000 : 0, // Convert kJ to J
-                        streams: formattedStreams
-                    };
-
-                    await db.addWorkout(workout);
-                    newCount++;
+                    avgPower = streamsData.watts ? streamsData.watts.reduce((a,b)=>a+b,0)/streamsData.watts.length : 0;
+                    maxPower = streamsData.watts ? Math.max(...streamsData.watts) : 0;
                 }
+
+                const workout = {
+                    userId: currentUser.id,
+                    title: activity.name,
+                    date: new Date(activity.start_date).toISOString(),
+                    source: 'strava_api',
+                    strava_id: activity.id,
+                    imported_at: new Date().toISOString(),
+                    start_time: new Date(activity.start_date).toISOString(),
+                    total_elapsed_time: activity.elapsed_time,
+                    total_distance: activity.distance,
+                    avg_speed: activity.average_speed,
+                    avg_power: activity.average_watts || avgPower || 0,
+                    max_power: activity.max_watts || maxPower || 0,
+                    avg_heart_rate: activity.average_heartrate || 0,
+                    max_heart_rate: activity.max_heartrate || 0,
+                    normalized_power: activity.weighted_average_watts || activity.average_watts || 0,
+                    total_work: activity.kilojoules ? activity.kilojoules * 1000 : 0,
+                    streams: formattedStreams
+                };
+
+                await db.addWorkout(workout);
+                newCount++;
+                console.log(`Successfully imported: ${activity.name}`);
             }
 
             await db.saveSettings('strava_last_sync', Math.floor(Date.now() / 1000));
             setStatus('success');
             setMessage(`Successfully synced ${newCount} new activities!`);
+            console.log(`Strava sync complete: ${newCount} new activities`);
             if (onUploadComplete && newCount > 0) onUploadComplete();
 
         } catch (err) {
