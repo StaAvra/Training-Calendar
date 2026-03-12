@@ -22,7 +22,6 @@ const Analysis = () => {
     const [criticalHeartRate, setCriticalHeartRate] = useState(null);
     const [sessionDerivedFtp, setSessionDerivedFtp] = useState(null);
     const [efData, setEfData] = useState([]);
-    const [allTimeEfData, setAllTimeEfData] = useState([]);
     const [multiTrendData, setMultiTrendData] = useState([]);
     const [baselineTrendData, setBaselineTrendData] = useState([]);
 
@@ -86,7 +85,6 @@ const Analysis = () => {
             duration_8m: 0, duration_10m: 0, duration_20m: 0, duration_60m: 0
         };
 
-        const efPoints = [];
         const allTimeEfPoints = [];
 
         // Scan ALL workouts
@@ -120,12 +118,17 @@ const Analysis = () => {
             const np = workout.normalized_power || workout.avg_power;
             const hr = workout.avg_heart_rate;
             const durationMin = workout.total_elapsed_time / 60;
-            const ifVal = workout.intensity_factor || (np / (currentUser.profile?.ftp || 250));
+            // Always recalculate IF against current FTP for consistent filtering
+            const ftp = currentUser.profile?.ftp || 250;
+            const ifVal = np ? (np / ftp) : null;
 
-            if (ifVal && ifVal <= 0.75 && durationMin >= 30 && np && hr > 0) {
+            if (ifVal && ifVal <= 0.80 && durationMin >= 30 && np && hr > 0) {
                 allTimeEfPoints.push({
-                    date: new Date(workout.date).getTime(), // Use timestamp for graph
-                    ef: Number((np / hr).toFixed(2))
+                    date: new Date(workout.date).getTime(),
+                    ef: Number((np / hr).toFixed(2)),
+                    name: workout.name || workout.title || 'Ride',
+                    np: Math.round(np),
+                    hr: Math.round(hr),
                 });
             }
 
@@ -143,13 +146,6 @@ const Analysis = () => {
                         if ((workout.heart_rate_curve[key] || 0) > hrBests[key]) {
                             hrBests[key] = workout.heart_rate_curve[key];
                         }
-                    });
-                }
-
-                if (ifVal && ifVal <= 0.75 && durationMin >= 30 && np && hr > 0) {
-                    efPoints.push({
-                        date: new Date(workout.date).getTime(),
-                        ef: Number((np / hr).toFixed(2))
                     });
                 }
             }
@@ -182,10 +178,12 @@ const Analysis = () => {
         });
         setHrBasedTssEstimates(hrBasedEstimates);
 
-        efPoints.sort((a, b) => a.date - b.date);
-        setEfData(efPoints);
+        // Build a single sorted EF dataset from all qualifying rides
         allTimeEfPoints.sort((a, b) => a.date - b.date);
-        setAllTimeEfData(allTimeEfPoints);
+        allTimeEfPoints.forEach(p => {
+            p.label = new Date(p.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        });
+        setEfData(allTimeEfPoints);
 
         const labels = {
             duration_5s: '5s', duration_10s: '10s',
@@ -642,40 +640,47 @@ const Analysis = () => {
                     <div className="card" style={{ gridColumn: '1 / -1' }}>
                         <div className={styles.cardHeader}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <h3 className="text-lg">Aerobic Efficiency Trend (Last 6 Weeks)</h3>
-                                <div title="Efficiency Factor (Normalized Power / Avg HR) for aerobic rides (IF < 0.75). rising trend = improved fitness." style={{ cursor: 'help', fontSize: '0.9em', opacity: 0.7 }}>ℹ️</div>
+                                <h3 className="text-lg">Aerobic Efficiency Trend</h3>
+                                <div title="Efficiency Factor (Normalized Power / Avg HR) for aerobic rides (IF ≤ 0.80, ≥ 30min). Rising trend = improved aerobic fitness." style={{ cursor: 'help', fontSize: '0.9em', opacity: 0.7 }}>ℹ️</div>
                             </div>
-                            <span className="text-sm text-muted">Sub-maximal fitness tracking (NP / HR)</span>
+                            <span className="text-sm text-muted">NP / HR per qualifying ride</span>
                         </div>
                         <div style={{ height: '250px', width: '100%' }}>
                             {efData.length > 0 ? (
                                 <ResponsiveContainer width="100%" height="100%">
-                                    <LineChart margin={{ top: 10, right: 30, left: 10, bottom: 5 }}>
+                                    <LineChart data={efData} margin={{ top: 10, right: 30, left: 10, bottom: 5 }}>
                                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                                         <XAxis
-                                            dataKey="date"
-                                            type="number"
-                                            domain={['auto', 'auto']}
-                                            scale="time"
+                                            dataKey="label"
                                             stroke="var(--text-secondary)"
                                             fontSize={12}
                                             tickLine={false}
                                             axisLine={false}
-                                            tickFormatter={(val) => new Date(val).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                                         />
                                         <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
                                         <Tooltip
-                                            labelFormatter={(val) => new Date(val).toLocaleDateString()}
-                                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                                            contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)', fontSize: '13px' }}
                                             cursor={{ stroke: 'var(--border-color)', strokeWidth: 1 }}
+                                            content={({ active, payload }) => {
+                                                if (!active || !payload?.length) return null;
+                                                const d = payload[0]?.payload;
+                                                if (!d) return null;
+                                                return (
+                                                    <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px 14px', fontSize: '13px' }}>
+                                                        <p style={{ fontWeight: 600, marginBottom: '4px' }}>{new Date(d.date).toLocaleDateString()}</p>
+                                                        <p style={{ color: 'var(--text-muted)', marginBottom: '4px', fontStyle: 'italic' }}>{d.name}</p>
+                                                        <p style={{ color: '#22c55e' }}>EF: {d.ef}</p>
+                                                        <p style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>NP: {d.np}W &middot; HR: {d.hr}bpm</p>
+                                                    </div>
+                                                );
+                                            }}
                                         />
-                                        <Line data={allTimeEfData} type="monotone" dataKey="ef" name="All-Time EF" stroke="var(--text-muted)" strokeWidth={1} dot={false} strokeDasharray="3 3" connectNulls />
-                                        <Line data={efData} type="monotone" dataKey="ef" name="Last 6 Weeks" stroke="#22c55e" strokeWidth={2} dot={{ r: 3, fill: '#22c55e' }} activeDot={{ r: 5 }} connectNulls />
+                                        <Line type="monotone" dataKey="ef" name="Aerobic Efficiency" stroke="#22c55e" strokeWidth={2} dot={{ r: 3, fill: '#22c55e' }} activeDot={{ r: 5 }} connectNulls />
                                     </LineChart>
                                 </ResponsiveContainer>
                             ) : (
                                 <div className="flex-center" style={{ height: '100%', color: 'var(--text-muted)' }}>
-                                    Need more aerobic rides (IF ≤ 0.75, ≥ 30min) to show trend.
+                                    Need more aerobic rides (IF ≤ 0.80, ≥ 30min) to show trend.
                                 </div>
                             )}
                         </div>
