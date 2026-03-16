@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useUser } from '../context/UserContext';
-import { Save, User, Activity, Heart, Link as LinkIcon, CheckCircle, Watch, LogOut } from 'lucide-react';
+import { Save, User, Activity, Heart, Link as LinkIcon, CheckCircle, Watch, LogOut, Calendar, RefreshCw } from 'lucide-react';
 import { calculateZones } from '../utils/analysis';
-import { testProxyConnection } from '../utils/stravaApi';
-import { garminLogin, garminLogout } from '../utils/garminApi';
+import { testProxyConnection, fetchStravaActivities, fetchStravaStreams } from '../utils/stravaApi';
+import { garminLogin, garminLogout, fetchGarminActivities } from '../utils/garminApi';
 import { db } from '../utils/db';
 import styles from './Profile.module.css';
 
@@ -20,9 +20,16 @@ const Profile = () => {
     const [garminEmail, setGarminEmail] = useState('');
     const [garminPassword, setGarminPassword] = useState('');
     const [garminLoading, setGarminLoading] = useState(false);
+    const [garminSyncing, setGarminSyncing] = useState(false);
+    const [garminSyncMessage, setGarminSyncMessage] = useState('');
     const [proxyUrl, setProxyUrl] = useState('');
     const [proxyInput, setProxyInput] = useState('');
     const [status, setStatus] = useState('');
+    const [syncMode, setSyncMode] = useState('now'); // 'now' | 'all' | 'custom' | 'fromDate'
+    const [syncFrom, setSyncFrom] = useState('');
+    const [syncTo, setSyncTo] = useState('');
+    const [syncing, setSyncing] = useState(false);
+    const [syncMessage, setSyncMessage] = useState('');
 
     useEffect(() => {
         if (currentUser?.profile) {
@@ -42,6 +49,14 @@ const Profile = () => {
             const defaultProxy = savedProxy || 'http://localhost:3000';
             setProxyUrl(defaultProxy);
             setProxyInput(defaultProxy);
+
+            // Load sync period settings
+            const savedSyncMode = await db.getSettings('sync_mode');
+            if (savedSyncMode) setSyncMode(savedSyncMode);
+            const savedSyncFrom = await db.getSettings('sync_from');
+            if (savedSyncFrom) setSyncFrom(savedSyncFrom);
+            const savedSyncTo = await db.getSettings('sync_to');
+            if (savedSyncTo) setSyncTo(savedSyncTo);
         };
         checkStravaStatus();
 
@@ -145,6 +160,234 @@ const Profile = () => {
         setTimeout(() => setStatus(''), 3000);
     };
 
+    /**
+     * Check if two start times are within 60 seconds of each other.
+     * Used to deduplicate activities synced from both Strava and Garmin.
+     */
+    const isSameStartTime = (time1, time2) => {
+        const t1 = new Date(time1).getTime();
+        const t2 = new Date(time2).getTime();
+        if (isNaN(t1) || isNaN(t2)) return false;
+        return Math.abs(t1 - t2) < 60000; // 60 second tolerance
+    };
+
+    const handleGarminSyncActivities = async () => {
+        if (!currentUser || !garminConnected) return;
+        setGarminSyncing(true);
+        setGarminSyncMessage('Fetching Garmin activities...');
+        try {
+            const activities = await fetchGarminActivities(200);
+
+            if (!activities || activities.length === 0) {
+                setGarminSyncMessage('No cycling activities found on Garmin.');
+                setGarminSyncing(false);
+                setTimeout(() => setGarminSyncMessage(''), 4000);
+                return;
+            }
+
+            setGarminSyncMessage(`Found ${activities.length} cycling activities. Importing...`);
+            const existingWorkouts = await db.getWorkouts(currentUser.id);
+            let newCount = 0;
+            let skippedCount = 0;
+
+            for (const activity of activities) {
+                // Deduplication: check garmin_id, strava_id, or matching start_time
+                const isDuplicate = existingWorkouts.some(w =>
+                    w.garmin_id === activity.garmin_id ||
+                    isSameStartTime(w.start_time, activity.start_time)
+                );
+                if (isDuplicate) {
+                    skippedCount++;
+                    continue;
+                }
+
+                await db.addWorkout({
+                    userId: currentUser.id,
+                    title: activity.name,
+                    date: new Date(activity.start_time).toISOString(),
+                    source: 'garmin_api',
+                    garmin_id: activity.garmin_id,
+                    imported_at: new Date().toISOString(),
+                    start_time: new Date(activity.start_time).toISOString(),
+                    total_elapsed_time: activity.total_elapsed_time,
+                    total_distance: activity.total_distance,
+                    avg_speed: activity.avg_speed,
+                    avg_power: activity.avg_power || 0,
+                    max_power: activity.max_power || 0,
+                    avg_heart_rate: activity.avg_heart_rate || 0,
+                    max_heart_rate: activity.max_heart_rate || 0,
+                    normalized_power: activity.normalized_power || 0,
+                    avg_cadence: activity.avg_cadence || 0,
+                    calories: activity.calories || 0,
+                    elevation_gain: activity.elevation_gain || 0,
+                    training_stress_score: activity.training_stress_score || null,
+                    intensity_factor: activity.intensity_factor || null,
+                    power_curve: activity.power_curve || null,
+                    streams: [] // Garmin summary data — no second-by-second streams via this API
+                });
+                newCount++;
+            }
+
+            setGarminSyncMessage(`Synced ${newCount} new activities! (${skippedCount} duplicates skipped)`);
+            setTimeout(() => setGarminSyncMessage(''), 5000);
+        } catch (err) {
+            console.error('Garmin activity sync error:', err);
+            setGarminSyncMessage(`Sync failed: ${err.message}`);
+        } finally {
+            setGarminSyncing(false);
+        }
+    };
+
+    const handleSyncModeChange = async (mode) => {
+        setSyncMode(mode);
+        await db.saveSettings('sync_mode', mode);
+        if (mode === 'now') {
+            await db.saveSettings('sync_from', '');
+            await db.saveSettings('sync_to', '');
+            setSyncFrom('');
+            setSyncTo('');
+        } else if (mode === 'all') {
+            const sixMonthsAgo = new Date();
+            sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+            const fromStr = sixMonthsAgo.toISOString().split('T')[0];
+            await db.saveSettings('sync_from', fromStr);
+            await db.saveSettings('sync_to', '');
+            setSyncFrom(fromStr);
+            setSyncTo('');
+        } else if (mode === 'fromDate') {
+            await db.saveSettings('sync_to', '');
+            setSyncTo('');
+        }
+    };
+
+    const handleCustomDateChange = async (field, value) => {
+        if (field === 'from') {
+            setSyncFrom(value);
+            await db.saveSettings('sync_from', value);
+        } else {
+            setSyncTo(value);
+            await db.saveSettings('sync_to', value);
+        }
+    };
+
+    const handleSyncNow = async () => {
+        if (!currentUser) return;
+        if (!stravaConnected) {
+            setStatus('Connect to Strava first.');
+            setTimeout(() => setStatus(''), 3000);
+            return;
+        }
+        setSyncing(true);
+        setSyncMessage('Testing backend...');
+        try {
+            const connTest = await testProxyConnection();
+            if (!connTest.ok) {
+                setSyncMessage(`Cannot reach backend: ${connTest.error || connTest.status}`);
+                setSyncing(false);
+                return;
+            }
+            setSyncMessage('Fetching activities...');
+
+            let afterEpoch;
+            let beforeEpoch;
+            if (syncMode === 'all') {
+                const sixMonthsAgo = new Date();
+                sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+                afterEpoch = Math.floor(sixMonthsAgo.getTime() / 1000);
+            } else if (syncMode === 'custom') {
+                afterEpoch = syncFrom ? Math.floor(new Date(syncFrom).getTime() / 1000) : Math.floor(Date.now() / 1000);
+                if (syncTo) {
+                    const toDate = new Date(syncTo);
+                    toDate.setHours(23, 59, 59);
+                    beforeEpoch = Math.floor(toDate.getTime() / 1000);
+                }
+            } else if (syncMode === 'fromDate') {
+                afterEpoch = syncFrom ? Math.floor(new Date(syncFrom).getTime() / 1000) : Math.floor(Date.now() / 1000);
+            } else {
+                let lastSync = await db.getSettings('strava_last_sync');
+                if (!lastSync) lastSync = Math.floor(Date.now() / 1000);
+                afterEpoch = lastSync;
+            }
+
+            const activities = await fetchStravaActivities(afterEpoch, beforeEpoch);
+            const cyclingTypes = ['Ride', 'VirtualRide', 'EBikeRide', 'Handcycle', 'Velomobile'];
+            const rides = (activities || []).filter(a => cyclingTypes.includes(a.type));
+
+            if (rides.length === 0) {
+                setSyncMessage('No new cycling activities found.');
+                await db.saveSettings('strava_last_sync', Math.floor(Date.now() / 1000));
+                setSyncing(false);
+                setTimeout(() => setSyncMessage(''), 4000);
+                return;
+            }
+
+            let newCount = 0;
+            const existingWorkouts = await db.getWorkouts(currentUser.id);
+
+            for (const activity of rides) {
+                const isDuplicate = existingWorkouts.some(w =>
+                    w.strava_id === activity.id ||
+                    w.garmin_id && isSameStartTime(w.start_time, activity.start_date) ||
+                    isSameStartTime(w.start_time, activity.start_date)
+                );
+                if (isDuplicate) continue;
+
+                setSyncMessage(`Fetching streams: ${activity.name}...`);
+                const streamSet = await fetchStravaStreams(activity.id);
+                let formattedStreams = [];
+                let avgPower = 0, maxPower = 0;
+
+                if (streamSet && streamSet.length > 0) {
+                    const streamsData = {};
+                    streamSet.forEach(s => { streamsData[s.type] = s.data; });
+                    const timeArr = streamsData.time || [];
+                    for (let i = 0; i < timeArr.length; i++) {
+                        formattedStreams.push({
+                            time: timeArr[i],
+                            power: streamsData.watts?.[i] ?? null,
+                            heart_rate: streamsData.heartrate?.[i] ?? null,
+                            cadence: streamsData.cadence?.[i] ?? null,
+                            speed: streamsData.velocity_smooth?.[i] ?? null,
+                            distance: streamsData.distance?.[i] ?? null
+                        });
+                    }
+                    avgPower = streamsData.watts ? streamsData.watts.reduce((a, b) => a + b, 0) / streamsData.watts.length : 0;
+                    maxPower = streamsData.watts ? Math.max(...streamsData.watts) : 0;
+                }
+
+                await db.addWorkout({
+                    userId: currentUser.id,
+                    title: activity.name,
+                    date: new Date(activity.start_date).toISOString(),
+                    source: 'strava_api',
+                    strava_id: activity.id,
+                    imported_at: new Date().toISOString(),
+                    start_time: new Date(activity.start_date).toISOString(),
+                    total_elapsed_time: activity.elapsed_time,
+                    total_distance: activity.distance,
+                    avg_speed: activity.average_speed,
+                    avg_power: activity.average_watts || avgPower || 0,
+                    max_power: activity.max_watts || maxPower || 0,
+                    avg_heart_rate: activity.average_heartrate || 0,
+                    max_heart_rate: activity.max_heartrate || 0,
+                    normalized_power: activity.weighted_average_watts || activity.average_watts || 0,
+                    total_work: activity.kilojoules ? activity.kilojoules * 1000 : 0,
+                    streams: formattedStreams
+                });
+                newCount++;
+            }
+
+            await db.saveSettings('strava_last_sync', Math.floor(Date.now() / 1000));
+            setSyncMessage(`Synced ${newCount} new activities!`);
+            setTimeout(() => setSyncMessage(''), 5000);
+        } catch (err) {
+            console.error('Sync error:', err);
+            setSyncMessage(`Sync failed: ${err.message}`);
+        } finally {
+            setSyncing(false);
+        }
+    };
+
     return (
         <div className="container" style={{ maxWidth: '800px' }}>
             <header style={{ marginBottom: 'var(--space-2xl)' }}>
@@ -227,6 +470,93 @@ const Profile = () => {
 
                     <div className="card" style={{ marginTop: 'var(--space-xl)' }}>
                         <h3 className="text-lg" style={{ marginBottom: 'var(--space-md)' }}>Integrations</h3>
+
+                        {/* Sync Period Selector */}
+                        <div style={{ marginBottom: 'var(--space-lg)', padding: 'var(--space-md)', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: 'var(--space-sm)' }}>
+                                <Calendar size={16} color="var(--text-secondary)" />
+                                <span className="text-sm" style={{ fontWeight: 600 }}>Sync Period</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                    <input type="radio" name="syncMode" value="now" checked={syncMode === 'now'} onChange={() => handleSyncModeChange('now')} />
+                                    From now onwards
+                                </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                    <input type="radio" name="syncMode" value="all" checked={syncMode === 'all'} onChange={() => handleSyncModeChange('all')} />
+                                    All history (last 6 months)
+                                </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                    <input type="radio" name="syncMode" value="custom" checked={syncMode === 'custom'} onChange={() => handleSyncModeChange('custom')} />
+                                    Custom period
+                                </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                    <input type="radio" name="syncMode" value="fromDate" checked={syncMode === 'fromDate'} onChange={() => handleSyncModeChange('fromDate')} />
+                                    From a specific date onwards
+                                </label>
+                                {syncMode === 'custom' && (
+                                    <div style={{ display: 'flex', gap: '8px', marginLeft: '24px', marginTop: '4px' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                            <small className="text-muted">From</small>
+                                            <input
+                                                type="date"
+                                                value={syncFrom}
+                                                max={new Date().toISOString().split('T')[0]}
+                                                min={(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().split('T')[0]; })()}
+                                                onChange={(e) => handleCustomDateChange('from', e.target.value)}
+                                                style={{ padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: '0.8rem' }}
+                                            />
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                            <small className="text-muted">To</small>
+                                            <input
+                                                type="date"
+                                                value={syncTo}
+                                                max={new Date().toISOString().split('T')[0]}
+                                                min={syncFrom || (() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().split('T')[0]; })()}
+                                                onChange={(e) => handleCustomDateChange('to', e.target.value)}
+                                                style={{ padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: '0.8rem' }}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                                {syncMode === 'fromDate' && (
+                                    <div style={{ display: 'flex', gap: '8px', marginLeft: '24px', marginTop: '4px' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                            <small className="text-muted">Starting from</small>
+                                            <input
+                                                type="date"
+                                                value={syncFrom}
+                                                max={new Date().toISOString().split('T')[0]}
+                                                min={(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().split('T')[0]; })()}
+                                                onChange={(e) => handleCustomDateChange('from', e.target.value)}
+                                                style={{ padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: '0.8rem' }}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            <button
+                                onClick={handleSyncNow}
+                                disabled={syncing || !stravaConnected}
+                                style={{
+                                    marginTop: 'var(--space-md)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                                    width: '100%', padding: '8px 16px',
+                                    background: stravaConnected ? '#fc4c02' : 'var(--bg-tertiary)',
+                                    color: stravaConnected ? 'white' : 'var(--text-secondary)',
+                                    border: 'none', borderRadius: 'var(--radius-sm)',
+                                    cursor: stravaConnected ? 'pointer' : 'not-allowed',
+                                    fontSize: '0.85rem', fontWeight: 600,
+                                    opacity: syncing ? 0.7 : 1
+                                }}
+                            >
+                                <RefreshCw size={14} className={syncing ? styles.spinning : ''} />
+                                {syncing ? 'Syncing...' : 'Sync Now'}
+                            </button>
+                            {syncMessage && <p className="text-sm" style={{ marginTop: '6px', color: syncMessage.includes('failed') ? 'var(--accent-danger)' : 'var(--text-secondary)' }}>{syncMessage}</p>}
+                        </div>
+
                         <div className={styles.integrationRow}>
                             <div>
                                 <h4 style={{ margin: 0 }}>Strava</h4>
@@ -249,7 +579,7 @@ const Profile = () => {
                         <div className={styles.integrationRow}>
                             <div>
                                 <h4 style={{ margin: 0 }}>Garmin Connect</h4>
-                                <p className="text-muted" style={{ fontSize: '0.85rem', margin: '4px 0 0 0' }}>Sync sleep, HRV, and resting heart rate.</p>
+                                <p className="text-muted" style={{ fontSize: '0.85rem', margin: '4px 0 0 0' }}>Sync activities, sleep, HRV, and resting heart rate.</p>
                             </div>
                             {garminConnected ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -299,6 +629,35 @@ const Profile = () => {
                                 </div>
                             )}
                         </div>
+                        {garminConnected && (
+                            <div style={{ marginTop: 'var(--space-md)', padding: 'var(--space-md)', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: 'var(--space-sm)' }}>
+                                    <Activity size={16} color="var(--text-secondary)" />
+                                    <span className="text-sm" style={{ fontWeight: 600 }}>Garmin Activities</span>
+                                </div>
+                                <p className="text-muted" style={{ fontSize: '0.8rem', marginBottom: 'var(--space-sm)' }}>
+                                    Import cycling activities with HR, power, speed, and distance. Duplicates with Strava are automatically detected and skipped.
+                                </p>
+                                <button
+                                    onClick={handleGarminSyncActivities}
+                                    disabled={garminSyncing}
+                                    style={{
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                                        width: '100%', padding: '8px 16px',
+                                        background: '#007dc3',
+                                        color: 'white',
+                                        border: 'none', borderRadius: 'var(--radius-sm)',
+                                        cursor: 'pointer',
+                                        fontSize: '0.85rem', fontWeight: 600,
+                                        opacity: garminSyncing ? 0.7 : 1
+                                    }}
+                                >
+                                    <RefreshCw size={14} className={garminSyncing ? styles.spinning : ''} />
+                                    {garminSyncing ? 'Syncing...' : 'Sync Garmin Activities'}
+                                </button>
+                                {garminSyncMessage && <p className="text-sm" style={{ marginTop: '6px', color: garminSyncMessage.includes('failed') ? 'var(--accent-danger)' : 'var(--text-secondary)' }}>{garminSyncMessage}</p>}
+                            </div>
+                        )}
                         {status && status.includes('Garmin') && <p className={styles.status} style={{marginTop: 'var(--space-sm)'}}>{status}</p>}
                     </div>
 

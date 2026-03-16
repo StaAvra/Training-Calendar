@@ -128,3 +128,48 @@ export const garminLogout = async () => {
     await db.saveSettings('garmin_connected', false);
     await db.saveSettings('garmin_tokens', null);
 };
+
+/**
+ * Fetch cycling activities from Garmin Connect.
+ * Paginates through all results.
+ * @param {number} [maxActivities=200] - Maximum number of activities to fetch
+ * @returns {Array} Array of normalized activity objects
+ */
+export const fetchGarminActivities = async (maxActivities = 200) => {
+    const restored = await garminRestore();
+    if (!restored) {
+        throw new Error('Garmin session expired. Please login again from Profile.');
+    }
+
+    const proxyUrl = await getProxyUrl();
+    let allActivities = [];
+    let start = 0;
+    const pageSize = 50;
+
+    while (allActivities.length < maxActivities) {
+        const res = await fetch(`${proxyUrl}/api/garmin/activities?start=${start}&limit=${pageSize}`);
+
+        if (!res.ok) {
+            const err = await safeJson(res);
+            if (res.status === 401) {
+                await db.saveSettings('garmin_connected', false);
+            }
+            throw new Error(err.error || 'Failed to fetch Garmin activities');
+        }
+
+        const data = await safeJson(res);
+
+        if (data.tokens) {
+            await db.saveSettings('garmin_tokens', data.tokens);
+        }
+
+        if (!data.activities || data.activities.length === 0) break;
+
+        allActivities = allActivities.concat(data.activities);
+
+        if (data.activities.length < pageSize) break;
+        start += pageSize;
+    }
+
+    return allActivities.slice(0, maxActivities);
+};

@@ -151,6 +151,8 @@ const RideDetailsModal = ({ workout, onClose }) => {
         : (isEditing ? editFormData.duration + ' m' : new Date(workout.total_elapsed_time * 1000).toISOString().substr(11, 8));
 
     const dDist = (currentMetrics.distance / 1000).toFixed(1);
+    // Average speed in km/h
+    const dAvgSpeed = currentMetrics.duration > 0 ? (currentMetrics.distance / currentMetrics.duration * 3.6).toFixed(1) : '--';
     const dAvgPwr = Math.round(currentMetrics.avg_power);
     const dAvgHR = Math.round(currentMetrics.avg_heart_rate);
     const dNP = Math.round(currentMetrics.normalized_power);
@@ -282,6 +284,7 @@ const RideDetailsModal = ({ workout, onClose }) => {
                     </div>
                 </div>
 
+
                 <div className={styles.statBox}>
                     <Navigation size={20} className={styles.icon} />
                     <div>
@@ -291,6 +294,18 @@ const RideDetailsModal = ({ workout, onClose }) => {
                             <span className={styles.value}>{dDist} km</span>
                         )}
                         <span className={styles.label}>Distance</span>
+                    </div>
+                </div>
+
+                <div className={styles.statBox}>
+                    <TrendingUp size={20} className={styles.icon} color="var(--accent-primary)" />
+                    <div>
+                        {isEditing ? (
+                            <input name="avg_speed" type="number" step="0.1" value={((Number(editFormData.distance) / Number(editFormData.duration)) * 60).toFixed(1)} disabled className={styles.valInput} />
+                        ) : (
+                            <span className={styles.value}>{dAvgSpeed} km/h</span>
+                        )}
+                        <span className={styles.label}>Avg Speed</span>
                     </div>
                 </div>
 

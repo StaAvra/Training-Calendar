@@ -559,6 +559,118 @@ const Analysis = () => {
                         </div>
                     </div>
 
+                    {/* Critical Power Stats */}
+                    <div className="card">
+                        <div className="flex-center" style={{ justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span className="text-muted">Critical Power (CP)</span>
+                                <div title="Theoretical aerobic ceiling (Monod & Scherrer model) with ± LoA range" style={{ cursor: 'help', fontSize: '0.8em', opacity: 0.7 }}>ℹ️</div>
+                            </div>
+                            <Zap size={20} color="var(--accent-warning)" />
+                        </div>
+                        {criticalPower ? (
+                            <>
+                                <p className="text-xl">{criticalPower.cp} W</p>
+                                <p className="text-sm text-muted" style={{ marginTop: 'var(--space-sm)' }}>
+                                    Probabilistic Range: {criticalPower.low}W - {criticalPower.high}W
+                                </p>
+                                <p className="text-sm text-muted" style={{ marginTop: '2px' }}>
+                                    W' (Anaerobic Capacity): {(criticalPower.w_prime / 1000).toFixed(1)} kJ
+                                </p>
+                            </>
+                        ) : (
+                            <p className="text-muted">Need max efforts (3min & 20min) to detect.</p>
+                        )}
+                    </div>
+
+                    {/* Critical Heart Rate (CHR) */}
+                    <div className="card">
+                        <div className="flex-center" style={{ justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span className="text-muted">Critical Heart Rate</span>
+                                <div title="Theoretical HR at Lactate Threshold/CP" style={{ cursor: 'help', fontSize: '0.8em', opacity: 0.7 }}>ℹ️</div>
+                            </div>
+                            <Heart size={20} color="var(--accent-danger)" />
+                        </div>
+                        {criticalHeartRate ? (
+                            <>
+                                <p className="text-xl">{criticalHeartRate.chr} bpm</p>
+                                <p className="text-sm text-muted" style={{ marginTop: 'var(--space-sm)' }}>
+                                    H' (Capacity &gt; Threshold): {criticalHeartRate.h_prime} beats
+                                </p>
+                            </>
+                        ) : (
+                            <p className="text-muted">Need max efforts to detect.</p>
+                        )}
+                    </div>
+
+                    {/* Estimated FTP */}
+                    <div className="card">
+                        <div className="flex-center" style={{ justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span className="text-muted">FTP derived from FTP Test-like sessions</span>
+                                <div title="95% of best 20min power" style={{ cursor: 'help', fontSize: '0.8em', opacity: 0.7 }}>ℹ️</div>
+                            </div>
+                            <TrendingUp size={20} color="var(--accent-primary)" />
+                        </div>
+                        <p className="text-xl">{currentUser?.profile.ftp} W</p>
+                        <p className="text-sm text-muted" style={{ marginTop: 'var(--space-sm)' }}>
+                            Current Setting
+                        </p>
+                        <button
+                            onClick={handleEstimateFtp}
+                            className={styles.estimateBtn}
+                            style={{
+                                marginTop: 'var(--space-md)',
+                                padding: '6px 12px',
+                                fontSize: '0.875rem',
+                                background: 'var(--bg-tertiary)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px'
+                            }}
+                        >
+                            <Calculator size={14} /> Update
+                        </button>
+                        {ftpSuggestion && (
+                            <div style={{ marginTop: 'var(--space-md)', borderTop: '1px dashed var(--border-color)', paddingTop: 'var(--space-sm)' }}>
+                                <p className="text-sm text-muted">Suggestion: {ftpSuggestion.reason}</p>
+                                <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                                    <button onClick={applyFtpSuggestion} className={styles.estimateBtn} style={{ padding: '6px 12px' }}>
+                                        Apply suggested FTP ({ftpSuggestion.suggestedUpdate} W)
+                                    </button>
+                                    <button onClick={() => setFtpSuggestion(null)} className="text-muted" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                                        Dismiss
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Session Derived FTP */}
+                    <div className="card">
+                        <div className="flex-center" style={{ justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span className="text-muted" style={{ fontSize: '0.85rem' }}>FTP derived from Interval Sessions</span>
+                                <div title="Estimated from sustained intervals (>=8m) in the last 40% of long rides (>1h, >70 TSS) with <4% cardiac drift" style={{ cursor: 'help', fontSize: '0.8em', opacity: 0.7 }}>ℹ️</div>
+                            </div>
+                            <Zap size={20} color="#eab308" />
+                        </div>
+                        {sessionDerivedFtp ? (
+                            <>
+                                <p className="text-xl">{sessionDerivedFtp.low}W - {sessionDerivedFtp.high}W</p>
+                                <p className="text-sm text-muted" style={{ marginTop: 'var(--space-sm)' }}>
+                                    Probability Range (95-100%)
+                                </p>
+                            </>
+                        ) : (
+                            <p className="text-muted" style={{ fontSize: '0.85rem' }}>No stable late-workout intervals detected yet.</p>
+                        )}
+                    </div>
+
                     {/* Performance Profile (W/kg vs benchmarks) */}
                     <div className="card" style={{ gridColumn: '1 / -1' }}>
                         <div className={styles.cardHeader}>
@@ -817,118 +929,6 @@ const Analysis = () => {
                         </div>
                     </div>
 
-                    {/* Critical Power Stats */}
-                    <div className="card">
-                        <div className="flex-center" style={{ justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span className="text-muted">Critical Power (CP)</span>
-                                <div title="Theoretical aerobic ceiling (Monod & Scherrer model) with ± LoA range" style={{ cursor: 'help', fontSize: '0.8em', opacity: 0.7 }}>ℹ️</div>
-                            </div>
-                            <Zap size={20} color="var(--accent-warning)" />
-                        </div>
-                        {criticalPower ? (
-                            <>
-                                <p className="text-xl">{criticalPower.cp} W</p>
-                                <p className="text-sm text-muted" style={{ marginTop: 'var(--space-sm)' }}>
-                                    Probabilistic Range: {criticalPower.low}W - {criticalPower.high}W
-                                </p>
-                                <p className="text-sm text-muted" style={{ marginTop: '2px' }}>
-                                    W' (Anaerobic Capacity): {(criticalPower.w_prime / 1000).toFixed(1)} kJ
-                                </p>
-                            </>
-                        ) : (
-                            <p className="text-muted">Need max efforts (3min & 20min) to detect.</p>
-                        )}
-                    </div>
-
-                    {/* Critical Heart Rate (CHR) */}
-                    <div className="card">
-                        <div className="flex-center" style={{ justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span className="text-muted">Critical Heart Rate</span>
-                                <div title="Theoretical HR at Lactate Threshold/CP" style={{ cursor: 'help', fontSize: '0.8em', opacity: 0.7 }}>ℹ️</div>
-                            </div>
-                            <Heart size={20} color="var(--accent-danger)" />
-                        </div>
-                        {criticalHeartRate ? (
-                            <>
-                                <p className="text-xl">{criticalHeartRate.chr} bpm</p>
-                                <p className="text-sm text-muted" style={{ marginTop: 'var(--space-sm)' }}>
-                                    H' (Capacity &gt; Threshold): {criticalHeartRate.h_prime} beats
-                                </p>
-                            </>
-                        ) : (
-                            <p className="text-muted">Need max efforts to detect.</p>
-                        )}
-                    </div>
-
-                    {/* Estimated FTP */}
-                    <div className="card">
-                        <div className="flex-center" style={{ justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span className="text-muted">FTP derived from FTP Test-like sessions</span>
-                                <div title="95% of best 20min power" style={{ cursor: 'help', fontSize: '0.8em', opacity: 0.7 }}>ℹ️</div>
-                            </div>
-                            <TrendingUp size={20} color="var(--accent-primary)" />
-                        </div>
-                        <p className="text-xl">{currentUser?.profile.ftp} W</p>
-                        <p className="text-sm text-muted" style={{ marginTop: 'var(--space-sm)' }}>
-                            Current Setting
-                        </p>
-                        <button
-                            onClick={handleEstimateFtp}
-                            className={styles.estimateBtn}
-                            style={{
-                                marginTop: 'var(--space-md)',
-                                padding: '6px 12px',
-                                fontSize: '0.875rem',
-                                background: 'var(--bg-tertiary)',
-                                border: '1px solid var(--border-color)',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '6px'
-                            }}
-                        >
-                            <Calculator size={14} /> Update
-                        </button>
-                        {ftpSuggestion && (
-                            <div style={{ marginTop: 'var(--space-md)', borderTop: '1px dashed var(--border-color)', paddingTop: 'var(--space-sm)' }}>
-                                <p className="text-sm text-muted">Suggestion: {ftpSuggestion.reason}</p>
-                                <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
-                                    <button onClick={applyFtpSuggestion} className={styles.estimateBtn} style={{ padding: '6px 12px' }}>
-                                        Apply suggested FTP ({ftpSuggestion.suggestedUpdate} W)
-                                    </button>
-                                    <button onClick={() => setFtpSuggestion(null)} className="text-muted" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-                                        Dismiss
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Session Derived FTP */}
-                    <div className="card">
-                        <div className="flex-center" style={{ justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span className="text-muted" style={{ fontSize: '0.85rem' }}>FTP derived from Interval Sessions</span>
-                                <div title="Estimated from sustained intervals (>=8m) in the last 40% of long rides (>1h, >70 TSS) with <4% cardiac drift" style={{ cursor: 'help', fontSize: '0.8em', opacity: 0.7 }}>ℹ️</div>
-                            </div>
-                            <Zap size={20} color="#eab308" />
-                        </div>
-                        {sessionDerivedFtp ? (
-                            <>
-                                <p className="text-xl">{sessionDerivedFtp.low}W - {sessionDerivedFtp.high}W</p>
-                                <p className="text-sm text-muted" style={{ marginTop: 'var(--space-sm)' }}>
-                                    Probability Range (95-100%)
-                                </p>
-                            </>
-                        ) : (
-                            <p className="text-muted" style={{ fontSize: '0.85rem' }}>No stable late-workout intervals detected yet.</p>
-                        )}
-                    </div>
-
                     {/* Time in Zones Chart */}
                     <div className="card" style={{ gridColumn: '1 / -1' }}>
                         <div className={styles.cardHeader}>
@@ -961,26 +961,27 @@ const Analysis = () => {
                         <div className="card" style={{ gridColumn: '1 / -1' }}>
                             <div className={styles.cardHeader}>
                                 <h3 className="text-lg">Training Distribution (Last 12 Weeks)</h3>
-                                <span className="text-sm text-muted">Weekly workout count by intensity zone</span>
+                                <span className="text-sm text-muted">Weekly total hours by intensity zone</span>
                             </div>
                             <div style={{ height: '280px', width: '100%' }}>
                                 <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={dnaData.weeklyTrends} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                                    <LineChart data={dnaData.weeklyTrends} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                                         <XAxis dataKey="weekLabel" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />
-                                        <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} label={{ value: 'Sessions', angle: -90, position: 'insideLeft', fill: 'var(--text-secondary)' }} />
+                                        <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} label={{ value: 'Hours', angle: -90, position: 'insideLeft', fill: 'var(--text-secondary)' }} />
                                         <Tooltip
                                             contentStyle={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
                                             itemStyle={{ color: 'var(--text-primary)' }}
+                                            formatter={(value, name) => [typeof value === 'number' ? value.toFixed(2) : value, name]}
                                         />
                                         <Legend wrapperStyle={{ paddingTop: '10px' }} />
-                                        <Area type="monotone" dataKey="Recovery" stackId="1" stroke="#888888" fill="#888888" fillOpacity={0.8} />
-                                        <Area type="monotone" dataKey="Endurance" stackId="1" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.8} />
-                                        <Area type="monotone" dataKey="Tempo" stackId="1" stroke="#22c55e" fill="#22c55e" fillOpacity={0.8} />
-                                        <Area type="monotone" dataKey="Threshold" stackId="1" stroke="#eab308" fill="#eab308" fillOpacity={0.8} />
-                                        <Area type="monotone" dataKey="VO2Max" stackId="1" stroke="#f97316" fill="#f97316" fillOpacity={0.8} />
-                                        <Area type="monotone" dataKey="Anaerobic" stackId="1" stroke="#ef4444" fill="#ef4444" fillOpacity={0.8} />
-                                    </AreaChart>
+                                        <Line type="monotone" dataKey="Recovery" name="Recovery" stroke="#888888" strokeWidth={2} dot={{ r: 2 }} />
+                                        <Line type="monotone" dataKey="Endurance" name="Endurance" stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
+                                        <Line type="monotone" dataKey="Tempo" name="Tempo" stroke="#22c55e" strokeWidth={2} dot={{ r: 2 }} />
+                                        <Line type="monotone" dataKey="Threshold" name="Threshold" stroke="#eab308" strokeWidth={2} dot={{ r: 2 }} />
+                                        <Line type="monotone" dataKey="VO2Max" name="VO2Max" stroke="#f97316" strokeWidth={2} dot={{ r: 2 }} />
+                                        <Line type="monotone" dataKey="Anaerobic" name="Anaerobic" stroke="#ef4444" strokeWidth={2} dot={{ r: 2 }} />
+                                    </LineChart>
                                 </ResponsiveContainer>
                             </div>
                         </div>

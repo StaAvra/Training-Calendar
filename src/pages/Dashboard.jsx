@@ -1,13 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { startOfWeek, endOfWeek, subDays, isWithinInterval, startOfDay } from 'date-fns';
 import { useUser } from '../context/UserContext';
 import { db } from '../utils/db';
 import { calculateCriticalPower, calculatePhenotype, calculateSessionDerivedFtp } from '../utils/analysis';
+import { fetchStravaActivities, fetchStravaStreams } from '../utils/stravaApi';
+import { fetchGarminActivities } from '../utils/garminApi';
 import FileDropzone from '../components/FileDropzone';
 import WorkoutPill from '../components/WorkoutPill';
 import Modal from '../components/Modal';
 import RideDetailsModal from '../components/RideDetailsModal';
-import { Activity, Clock, Zap } from 'lucide-react';
+import { Activity, Clock, Zap, RefreshCw, Watch } from 'lucide-react';
 
 const Dashboard = () => {
     const { currentUser } = useUser();
@@ -15,6 +17,13 @@ const Dashboard = () => {
     const [stats, setStats] = useState({ count: 0, distance: 0, duration: 0 });
     const [performance, setPerformance] = useState({ cp: null, ae: null, phenotype: null, sessionDerivedFtp: null });
     const [selectedWorkout, setSelectedWorkout] = useState(null);
+    const [stravaConnected, setStravaConnected] = useState(false);
+    const [garminConnected, setGarminConnected] = useState(false);
+    const [stravaSyncing, setStravaSyncing] = useState(false);
+    const [stravaSyncMsg, setStravaSyncMsg] = useState('');
+    const [garminSyncing, setGarminSyncing] = useState(false);
+    const [garminSyncMsg, setGarminSyncMsg] = useState('');
+    const autoSyncRan = useRef(false);
 
     const loadData = async () => {
         if (!currentUser) return;
@@ -70,8 +79,181 @@ const Dashboard = () => {
         setPerformance({ cp, ae, phenotype, sessionDerivedFtp });
     };
 
+    // Returns true if two timestamps are within 60 seconds of each other
+    const isSameStartTime = (t1, t2) => {
+        const a = new Date(t1).getTime();
+        const b = new Date(t2).getTime();
+        if (isNaN(a) || isNaN(b)) return false;
+        return Math.abs(a - b) < 60000;
+    };
+
+    const syncStrava = async (silent = false) => {
+        const token = await db.getSettings('strava_access_token');
+        if (!token) return;
+        if (!silent) setStravaSyncing(true);
+        setStravaSyncMsg(silent ? '' : 'Syncing Strava...');
+        try {
+            let lastSync = await db.getSettings('strava_last_sync');
+            if (!lastSync) lastSync = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
+            const activities = await fetchStravaActivities(lastSync);
+            const cyclingTypes = ['Ride', 'VirtualRide', 'EBikeRide', 'Handcycle', 'Velomobile'];
+            const rides = (activities || []).filter(a => cyclingTypes.includes(a.type));
+            if (rides.length === 0) {
+                await db.saveSettings('strava_last_sync', Math.floor(Date.now() / 1000));
+                if (!silent) setStravaSyncMsg('No new Strava rides.');
+                return;
+            }
+            const existingWorkouts = await db.getWorkouts(currentUser.id);
+            let newCount = 0;
+            for (const activity of rides) {
+                const isDup = existingWorkouts.some(w =>
+                    w.strava_id === activity.id ||
+                    isSameStartTime(w.start_time, activity.start_date)
+                );
+                if (isDup) continue;
+                const streamSet = await fetchStravaStreams(activity.id);
+                let streams = [], avgPower = 0, maxPower = 0;
+                if (streamSet && streamSet.length > 0) {
+                    const sd = {};
+                    streamSet.forEach(s => { sd[s.type] = s.data; });
+                    const timeArr = sd.time || [];
+                    for (let i = 0; i < timeArr.length; i++) {
+                        streams.push({
+                            time: timeArr[i],
+                            power: sd.watts?.[i] ?? null,
+                            heart_rate: sd.heartrate?.[i] ?? null,
+                            cadence: sd.cadence?.[i] ?? null,
+                            speed: sd.velocity_smooth?.[i] ?? null,
+                            distance: sd.distance?.[i] ?? null
+                        });
+                    }
+                    avgPower = sd.watts ? sd.watts.reduce((a, b) => a + b, 0) / sd.watts.length : 0;
+                    maxPower = sd.watts ? Math.max(...sd.watts) : 0;
+                }
+                await db.addWorkout({
+                    userId: currentUser.id,
+                    title: activity.name,
+                    date: new Date(activity.start_date).toISOString(),
+                    source: 'strava_api',
+                    strava_id: activity.id,
+                    imported_at: new Date().toISOString(),
+                    start_time: new Date(activity.start_date).toISOString(),
+                    total_elapsed_time: activity.elapsed_time,
+                    total_distance: activity.distance,
+                    avg_speed: activity.average_speed,
+                    avg_power: activity.average_watts || avgPower || 0,
+                    max_power: activity.max_watts || maxPower || 0,
+                    avg_heart_rate: activity.average_heartrate || 0,
+                    max_heart_rate: activity.max_heartrate || 0,
+                    normalized_power: activity.weighted_average_watts || activity.average_watts || 0,
+                    total_work: activity.kilojoules ? activity.kilojoules * 1000 : 0,
+                    streams
+                });
+                newCount++;
+            }
+            await db.saveSettings('strava_last_sync', Math.floor(Date.now() / 1000));
+            if (!silent) setStravaSyncMsg(`Synced ${newCount} new Strava ride${newCount !== 1 ? 's' : ''}!`);
+            if (newCount > 0) await loadData();
+        } catch (err) {
+            console.error('Dashboard Strava sync error:', err);
+            if (!silent) setStravaSyncMsg(`Strava sync failed: ${err.message}`);
+        } finally {
+            if (!silent) {
+                setStravaSyncing(false);
+                setTimeout(() => setStravaSyncMsg(''), 5000);
+            }
+        }
+    };
+
+    const syncGarmin = async (silent = false) => {
+        const connected = await db.getSettings('garmin_connected');
+        if (!connected) return;
+        if (!silent) setGarminSyncing(true);
+        setGarminSyncMsg(silent ? '' : 'Syncing Garmin...');
+        try {
+            const activities = await fetchGarminActivities(200);
+            if (!activities || activities.length === 0) {
+                if (!silent) setGarminSyncMsg('No Garmin activities found.');
+                return;
+            }
+            const existingWorkouts = await db.getWorkouts(currentUser.id);
+            let newCount = 0;
+            for (const activity of activities) {
+                const isDup = existingWorkouts.some(w =>
+                    w.garmin_id === activity.garmin_id ||
+                    isSameStartTime(w.start_time, activity.start_time)
+                );
+                if (isDup) continue;
+                await db.addWorkout({
+                    userId: currentUser.id,
+                    title: activity.name,
+                    date: new Date(activity.start_time).toISOString(),
+                    source: 'garmin_api',
+                    garmin_id: activity.garmin_id,
+                    imported_at: new Date().toISOString(),
+                    start_time: new Date(activity.start_time).toISOString(),
+                    total_elapsed_time: activity.total_elapsed_time,
+                    total_distance: activity.total_distance,
+                    avg_speed: activity.avg_speed,
+                    avg_power: activity.avg_power || 0,
+                    max_power: activity.max_power || 0,
+                    avg_heart_rate: activity.avg_heart_rate || 0,
+                    max_heart_rate: activity.max_heart_rate || 0,
+                    normalized_power: activity.normalized_power || 0,
+                    avg_cadence: activity.avg_cadence || 0,
+                    calories: activity.calories || 0,
+                    elevation_gain: activity.elevation_gain || 0,
+                    training_stress_score: activity.training_stress_score || null,
+                    intensity_factor: activity.intensity_factor || null,
+                    power_curve: activity.power_curve || null,
+                    streams: []
+                });
+                newCount++;
+            }
+            await db.saveSettings('garmin_last_sync', Math.floor(Date.now() / 1000));
+            if (!silent) setGarminSyncMsg(`Synced ${newCount} new Garmin ride${newCount !== 1 ? 's' : ''}!`);
+            if (newCount > 0) await loadData();
+        } catch (err) {
+            console.error('Dashboard Garmin sync error:', err);
+            if (!silent) setGarminSyncMsg(`Garmin sync failed: ${err.message}`);
+        } finally {
+            if (!silent) {
+                setGarminSyncing(false);
+                setTimeout(() => setGarminSyncMsg(''), 5000);
+            }
+        }
+    };
+
     useEffect(() => {
         loadData();
+
+        // Check connection status and auto-sync if last sync was >1 hour ago
+        const initSync = async () => {
+            if (autoSyncRan.current) return;
+            autoSyncRan.current = true;
+
+            const stravaToken = await db.getSettings('strava_access_token');
+            const garminConn = await db.getSettings('garmin_connected');
+            setStravaConnected(!!stravaToken);
+            setGarminConnected(!!garminConn);
+
+            const oneHourAgo = Math.floor(Date.now() / 1000) - 3600;
+
+            if (stravaToken) {
+                const lastStravaSync = await db.getSettings('strava_last_sync');
+                if (!lastStravaSync || lastStravaSync < oneHourAgo) {
+                    await syncStrava(true);
+                }
+            }
+
+            if (garminConn) {
+                const lastGarminSync = await db.getSettings('garmin_last_sync');
+                if (!lastGarminSync || lastGarminSync < oneHourAgo) {
+                    await syncGarmin(true);
+                }
+            }
+        };
+        initSync();
     }, [currentUser]);
 
     if (!currentUser) return <div className="container">Loading user...</div>;
@@ -140,6 +322,55 @@ const Dashboard = () => {
 
                 {/* Sidebar / Performance Status */}
                 <div>
+                    {/* Sync Buttons */}
+                    {(stravaConnected || garminConnected) && (
+                        <div className="card" style={{ marginBottom: 'var(--space-md)', display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
+                            <h3 className="text-sm text-muted" style={{ textTransform: 'uppercase', marginBottom: '2px' }}>Sync</h3>
+                            {stravaConnected && (
+                                <div>
+                                    <button
+                                        onClick={() => syncStrava(false)}
+                                        disabled={stravaSyncing}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                                            width: '100%', padding: '7px 12px',
+                                            background: '#fc4c02', color: 'white',
+                                            border: 'none', borderRadius: 'var(--radius-sm)',
+                                            cursor: stravaSyncing ? 'not-allowed' : 'pointer',
+                                            fontSize: '0.82rem', fontWeight: 600,
+                                            opacity: stravaSyncing ? 0.7 : 1
+                                        }}
+                                    >
+                                        <RefreshCw size={13} style={stravaSyncing ? { animation: 'spin 1s linear infinite' } : {}} />
+                                        {stravaSyncing ? 'Syncing Strava...' : 'Sync Strava'}
+                                    </button>
+                                    {stravaSyncMsg && <p className="text-xs" style={{ marginTop: '4px', color: stravaSyncMsg.includes('failed') ? 'var(--accent-danger)' : 'var(--text-secondary)' }}>{stravaSyncMsg}</p>}
+                                </div>
+                            )}
+                            {garminConnected && (
+                                <div>
+                                    <button
+                                        onClick={() => syncGarmin(false)}
+                                        disabled={garminSyncing}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                                            width: '100%', padding: '7px 12px',
+                                            background: '#007dc3', color: 'white',
+                                            border: 'none', borderRadius: 'var(--radius-sm)',
+                                            cursor: garminSyncing ? 'not-allowed' : 'pointer',
+                                            fontSize: '0.82rem', fontWeight: 600,
+                                            opacity: garminSyncing ? 0.7 : 1
+                                        }}
+                                    >
+                                        <Watch size={13} style={garminSyncing ? { animation: 'spin 1s linear infinite' } : {}} />
+                                        {garminSyncing ? 'Syncing Garmin...' : 'Sync Garmin'}
+                                    </button>
+                                    {garminSyncMsg && <p className="text-xs" style={{ marginTop: '4px', color: garminSyncMsg.includes('failed') ? 'var(--accent-danger)' : 'var(--text-secondary)' }}>{garminSyncMsg}</p>}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
                         <div>
                             <h3 className="text-sm text-muted" style={{ textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>Current FTP</h3>

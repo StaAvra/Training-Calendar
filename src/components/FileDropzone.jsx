@@ -111,14 +111,46 @@ const FileDropzone = ({ onUploadComplete }) => {
 
             setMessage('Fetching new Strava activities...');
 
-            // Only sync activities from the current moment onward (no backfill)
-            // This prevents duplicates with manually uploaded .fit files
-            let lastSync = await db.getSettings('strava_last_sync');
-            if (!lastSync) lastSync = Math.floor(Date.now() / 1000);
+            // Determine sync period from user settings
+            const syncMode = await db.getSettings('sync_mode') || 'now';
+            let afterEpoch;
+            let beforeEpoch;
 
-            console.log('Starting Strava sync, last sync:', new Date(lastSync * 1000).toISOString());
+            if (syncMode === 'all') {
+                const sixMonthsAgo = new Date();
+                sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+                afterEpoch = Math.floor(sixMonthsAgo.getTime() / 1000);
+            } else if (syncMode === 'custom') {
+                const syncFrom = await db.getSettings('sync_from');
+                const syncTo = await db.getSettings('sync_to');
+                if (syncFrom) {
+                    afterEpoch = Math.floor(new Date(syncFrom).getTime() / 1000);
+                } else {
+                    afterEpoch = Math.floor(Date.now() / 1000);
+                }
+                if (syncTo) {
+                    // End of the selected day
+                    const toDate = new Date(syncTo);
+                    toDate.setHours(23, 59, 59);
+                    beforeEpoch = Math.floor(toDate.getTime() / 1000);
+                }
+            } else if (syncMode === 'fromDate') {
+                const syncFrom = await db.getSettings('sync_from');
+                if (syncFrom) {
+                    afterEpoch = Math.floor(new Date(syncFrom).getTime() / 1000);
+                } else {
+                    afterEpoch = Math.floor(Date.now() / 1000);
+                }
+            } else {
+                // 'now' mode: only sync from last sync time onward
+                let lastSync = await db.getSettings('strava_last_sync');
+                if (!lastSync) lastSync = Math.floor(Date.now() / 1000);
+                afterEpoch = lastSync;
+            }
 
-            const activities = await fetchStravaActivities(lastSync);
+            console.log(`Starting Strava sync (mode: ${syncMode}), after: ${new Date(afterEpoch * 1000).toISOString()}${beforeEpoch ? ', before: ' + new Date(beforeEpoch * 1000).toISOString() : ''}`);
+
+            const activities = await fetchStravaActivities(afterEpoch, beforeEpoch);
             
             if (!activities || activities.length === 0) {
                 setStatus('success');
@@ -263,11 +295,7 @@ const FileDropzone = ({ onUploadComplete }) => {
                             <p className="text-lg">Drag & Drop your <strong>.fit</strong> file here</p>
                             <p className="text-sm text-muted">or click to browse</p>
                         </label>
-                        {isStravaConnected && (
-                            <button onClick={handleStravaSync} className={styles.stravaSyncBtn}>
-                                <RefreshCw size={14} /> Sync from Strava
-                            </button>
-                        )}
+                        {/* Strava sync button removed as requested */}
                         {status === 'error' && (
                             <div className={styles.error}>
                                 <CircleAlert size={16} />

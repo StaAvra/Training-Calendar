@@ -375,7 +375,7 @@ Used when high-resolution stream data is unavailable:
 **Purpose:** Show how your training distribution is changing.
 
 **Calculation:**
-1. Split last 12 weeks into two 6-week periods
+1. **Split last 12 weeks into two 6-week periods**
 2. Count workouts of each type in each period
 3. Calculate percentage change:
    ```
@@ -420,7 +420,7 @@ Used when high-resolution stream data is unavailable:
    - **Stress Adaptation:** Performance improved at similar/higher stress → Good handling of training load
 
 4. **Stagnation Detection:**
-   - High TSS (>300/week) + Low average feeling (<10 on scale) + No improvement or decline
+   - High TSS (>300/week) + Low average feeling (**<10 on scale)** + No improvement or decline
    - Flag as potential overtraining risk
 
 **Function:** `analyzeAdaptations(workouts, metrics, ftpHistory)`
@@ -484,8 +484,8 @@ Final_Zone_Weight = (History_Pct × 0.50) + (Goal_Pct × 0.40) + (Baseline_Pct �
    - Anaerobic: 1x/week (if speed goal and time allows)
 
 4. **Time-Constraint Detection:**
-   - If available hours < 80% of historical success volume → use intensity progression
-   - Otherwise → use volume progression
+   -** If available hours < 80% of historical success volume → use intensity progression
+   - Otherwise → use volume progression**
 
 **Function:** `generateSessionPlan(zoneDistribution, availabilityHours, avgSuccessVol)`
 
@@ -585,7 +585,7 @@ Final_Zone_Weight = (History_Pct × 0.50) + (Goal_Pct × 0.40) + (Baseline_Pct �
 | Min interval duration | 480s (8 min) | Minimum for session-derived FTP |
 | Volume improvement threshold | 1.5% | Detect power gains |
 | Overtraining TSS threshold | 300+ TSS | Flag high stress |
-| Overtraining feeling threshold | <10 (scale 1-10) | Flag low feeling |
+| Overtraining feeling threshold | **<10 (scale 1-10) |** Flag low feeling |
 | Best week minimum workouts | 2 | Need 2+ rides to qualify |
 | CP accuracy range | ±26 W | Expected variation (±19 to +33 W) |
 | Performance decline threshold | -2% | Detect concerning drops |

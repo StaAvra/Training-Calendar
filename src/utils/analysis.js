@@ -1068,17 +1068,26 @@ export const calculateTrainingDNA = (workouts, metrics, ftp) => {
             return d >= currentWeekStart && d < addWeeks(currentWeekStart, 1);
         });
 
-        const counts = { Recovery: 0, Endurance: 0, Tempo: 0, Threshold: 0, VO2Max: 0, Anaerobic: 0 };
-        weekWorkouts.forEach(w => {
-            const label = classifyWorkout(w, safeFtp);
-            if (counts[label] !== undefined) counts[label]++;
-        });
 
-        weeklyTrends.push({
-            weekStart: currentWeekStart.toLocaleDateString(),
-            weekLabel: `W${weeklyTrends.length + 1}`,
-            ...counts
-        });
+            // Aggregate durations per category: sum durations of sessions classified in that category
+            const durations = { Recovery: 0, Endurance: 0, Tempo: 0, Threshold: 0, VO2Max: 0, Anaerobic: 0 };
+            weekWorkouts.forEach(w => {
+                const label = classifyWorkout(w, safeFtp);
+                if (durations[label] !== undefined) {
+                    durations[label] += (w.total_elapsed_time || 0) / 3600; // convert seconds to hours
+                }
+            });
+
+            weeklyTrends.push({
+                weekStart: currentWeekStart.toLocaleDateString(),
+                weekLabel: `W${weeklyTrends.length + 1}`,
+                Recovery: Number(durations.Recovery.toFixed(2)),
+                Endurance: Number(durations.Endurance.toFixed(2)),
+                Tempo: Number(durations.Tempo.toFixed(2)),
+                Threshold: Number(durations.Threshold.toFixed(2)),
+                VO2Max: Number(durations.VO2Max.toFixed(2)),
+                Anaerobic: Number(durations.Anaerobic.toFixed(2))
+            });
 
         currentWeekStart = addWeeks(currentWeekStart, 1);
         if (weeklyTrends.length >= 12) break; // Limit to 12 weeks

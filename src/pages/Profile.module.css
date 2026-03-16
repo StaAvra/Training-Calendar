@@ -127,3 +127,12 @@
     background-color: rgba(30, 214, 96, 0.1); /* Slight green tint */
     border-radius: var(--radius-sm);
 }
+
+.spinning {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}

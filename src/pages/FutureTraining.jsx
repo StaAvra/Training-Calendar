@@ -165,11 +165,11 @@ const FutureTraining = () => {
                                     <LineChart data={dnaData.weeklyTrends}>
                                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
                                         <XAxis dataKey="weekLabel" stroke="var(--text-secondary)" fontSize={12} />
-                                        <YAxis stroke="var(--text-secondary)" fontSize={12} label={{ value: 'Rides (Avg)', angle: -90, position: 'insideLeft', fill: 'var(--text-secondary)' }} />
+                                        <YAxis stroke="var(--text-secondary)" fontSize={12} label={{ value: 'Hours (Avg)', angle: -90, position: 'insideLeft', fill: 'var(--text-secondary)' }} />
                                         <Tooltip
                                             contentStyle={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
                                             itemStyle={{ color: 'var(--text-primary)' }}
-                                            formatter={(value, name) => [typeof value === 'number' ? value.toFixed(1) : value, name]}
+                                            formatter={(value, name) => [typeof value === 'number' ? value.toFixed(2) : value, name]}
                                         />
                                         <Legend wrapperStyle={{ paddingTop: '10px' }} />
                                         <Line type="monotone" dataKey="RecoveryRolling" name="Recovery" stroke="#888888" strokeWidth={2} dot={{ r: 2 }} />

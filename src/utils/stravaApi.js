@@ -112,8 +112,9 @@ export const getValidStravaToken = async () => {
  * Fetches recent activities for the user after a certain date.
  * Paginates through all results (Strava returns max 30 per page).
  * @param {number} afterEpoch - Unix epoch timestamp in seconds
+ * @param {number} [beforeEpoch] - Optional upper bound epoch timestamp in seconds
  */
-export const fetchStravaActivities = async (afterEpoch) => {
+export const fetchStravaActivities = async (afterEpoch, beforeEpoch) => {
     const token = await getValidStravaToken();
     
     // Default to last 30 days if no epoch provided
@@ -125,7 +126,8 @@ export const fetchStravaActivities = async (afterEpoch) => {
         const perPage = 50;
 
         while (true) {
-            const url = `${STRAVA_API_BASE}/athlete/activities?after=${after}&per_page=${perPage}&page=${page}`;
+            let url = `${STRAVA_API_BASE}/athlete/activities?after=${after}&per_page=${perPage}&page=${page}`;
+            if (beforeEpoch) url += `&before=${beforeEpoch}`;
             console.log(`Fetching Strava activities page ${page}: ${url}`);
             
             const res = await fetch(url, {
