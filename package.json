@@ -6,6 +6,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
+    "backend": "npm --prefix backend start",
     "build": "vite build",
     "lint": "eslint .",
     "test:checkftp": "node scripts/test_checkFtp.mjs",
