@@ -1,5 +1,5 @@
-import { subWeeks, startOfWeek, endOfWeek, addWeeks, subDays, isWithinInterval } from 'date-fns';
-import { calculatePhenotype } from './analysis';
+import { startOfWeek, endOfWeek, addWeeks } from 'date-fns';
+import { trainResponderModel, describeResponderProfile } from './intelligence/mlModel.js';
 
 /**
  * Analyzes the correlation between Training Stress (TSS/Volume) and Performance Adaptations.
@@ -151,9 +151,33 @@ export const analyzeAdaptations = (workouts, metrics, ftpHistory) => {
     }
 
     return {
+        workouts: enrichedWorkouts,
         weeklyStats,
         adaptations,
         stagnationZones
+    };
+};
+
+export const analyzeResponderProfile = (analysis, profile) => {
+    const model = trainResponderModel(analysis, profile);
+    const narrative = describeResponderProfile(model);
+
+    return {
+        responderType: model.responderType,
+        confidence: model.confidence,
+        volumeResponderScore: model.responderProbabilities?.Volume || 0,
+        intensityResponderScore: model.responderProbabilities?.Intensity || 0,
+        balancedResponderScore: model.responderProbabilities?.Balanced || 0,
+        mixedResponderScore: model.responderProbabilities?.Mixed || 0,
+        bestHistoricalMix: model.bestHistoricalMix,
+        responderTimeline: model.responderTimeline,
+        hasResponderShift: model.hasResponderShift,
+        lastShiftDate: model.lastShiftDate,
+        trainedBlockCount: model.trainedBlockCount,
+        modelType: model.modelType,
+        featureImportance: model.featureImportance,
+        currentState: model.currentState,
+        recommendations: narrative
     };
 };
 
@@ -209,7 +233,7 @@ const getGoalZoneModifiers = (goal) => {
  * Blends historical success patterns with goal modifiers.
  * Returns weighted zone distribution considering what has worked + target goal.
  */
-const blendHistoryWithGoal = (analysis, goal, avgSuccessVol) => {
+const blendHistoryWithGoal = (analysis, goal, avgSuccessVol, responderProfile = null) => {
     const goalModifiers = getGoalZoneModifiers(goal);
 
     // If we have strong historical patterns, weight them 50%
@@ -227,9 +251,12 @@ const blendHistoryWithGoal = (analysis, goal, avgSuccessVol) => {
         vo2max: 0.08
     };
 
-    // Historical pattern (derived from success types)
-    let historicalPattern = { ...baseDistribution };
-    if (analysis.adaptations.length > 0) {
+    // Historical pattern uses the trained local model when available.
+    let historicalPattern = responderProfile?.bestHistoricalMix
+        ? { ...baseDistribution, ...responderProfile.bestHistoricalMix }
+        : { ...baseDistribution };
+
+    if (!responderProfile?.bestHistoricalMix && analysis.adaptations.length > 0) {
         const recentAdaptations = analysis.adaptations.slice(-5);
         const hasVolumeGains = recentAdaptations.some(a => a.improvements?.includes('Consistent Volume Growth'));
         const hasIntensityGains = recentAdaptations.some(a =>
@@ -434,11 +461,14 @@ const generateSessionPlan = (zoneDistribution, availabilityHours, avgSuccessVol,
  * Determines progression strategy based on historical data and recommendation.
  * Returns either "Volume" or "Intensity" progression type.
  */
-const determineProgressionStrategy = (analysis, availabilityHours, avgSuccessVol) => {
+const determineProgressionStrategy = (analysis, availabilityHours, avgSuccessVol, responderProfile = null) => {
     const isTimeConstrained = availabilityHours < avgSuccessVol * 0.8;
 
     // If time-constrained, focus on intensity progression
     if (isTimeConstrained) return 'Intensity';
+
+    if (responderProfile?.responderType === 'Intensity') return 'Intensity';
+    if (responderProfile?.responderType === 'Volume') return 'Volume';
 
     // Check if user has shown better response to volume
     if (analysis.adaptations.length > 0) {
@@ -573,6 +603,7 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
     // 1. Analyze Adaptation Drivers
     const successfulBlocks = analysis.adaptations.filter(a => a.type === 'Stress Adaptation');
     const avgSuccessVol = successfulBlocks.length ? (successfulBlocks.reduce((acc, b) => acc + b.avgVol, 0) / successfulBlocks.length) : 0;
+    const responderProfile = analyzeResponderProfile(analysis, profile);
 
     // --- SAFETY CHECK: Volume Progression (10% Rule) ---
     // Calculate recent 4-week average volume
@@ -597,13 +628,13 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
     const isCapped = effectiveAvailability < availabilityHours;
 
     // 2. Blend history + goal + availability
-    const zoneDistribution = blendHistoryWithGoal(analysis, goal, avgSuccessVol);
+    const zoneDistribution = blendHistoryWithGoal(analysis, goal, avgSuccessVol, responderProfile);
 
     // 3. Generate session breakdown
     const weeklyPlan = generateSessionPlan(zoneDistribution, effectiveAvailability, avgSuccessVol, daysAvailable);
 
     // 4. Determine progression strategy and generate 4-week plan
-    const progressionType = determineProgressionStrategy(analysis, effectiveAvailability, avgSuccessVol);
+    const progressionType = determineProgressionStrategy(analysis, effectiveAvailability, avgSuccessVol, responderProfile);
     const fourWeekPlan = generateFourWeekPlan(weeklyPlan, analysis, effectiveAvailability, avgSuccessVol, progressionType);
 
     // 5. Generate narrative
@@ -617,6 +648,21 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
         advice.push(`To prevent injury and overtraining, we've limited this plan to **${effectiveAvailability.toFixed(1)}h/week** (a safe 10% increase). Consistency beats intensity!`);
     }
 
+    if (responderProfile?.recommendations) {
+        advice.push(`🎯 **${responderProfile.recommendations.title}**`);
+        advice.push(responderProfile.recommendations.message);
+        if (responderProfile.recommendations.zoneRecommendation) {
+            advice.push(`**Model Readout**: ${responderProfile.recommendations.zoneRecommendation}`);
+        }
+        if (responderProfile.recommendations.progressionTip) {
+            advice.push(`**Progression Tip**: ${responderProfile.recommendations.progressionTip}`);
+        }
+
+        if (responderProfile.hasResponderShift && responderProfile.lastShiftDate) {
+            advice.push(`**Responder Shift Detected**: Your recent history suggests your training response changed around **${new Date(responderProfile.lastShiftDate).toLocaleDateString()}**. This plan weights your more recent successful blocks more heavily than older ones.`);
+        }
+    }
+
     // Check availability constraint (vs Success)
     // Use effectiveAvailability for comparison
     const isTimeConstrained = effectiveAvailability < avgSuccessVol * 0.8;
@@ -626,14 +672,22 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
             advice.push(`Your history shows success with **${avgSuccessVol.toFixed(1)}h/week**, but you have **${effectiveAvailability.toFixed(1)}h** available.`);
         }
         advice.push(`This plan prioritizes **intensity over volume**—focus on high-quality sessions to maximize your training effect.`);
-    } else if (successfulBlocks.length > 0) {
+    } else if (responderProfile?.responderType === 'Volume' || successfulBlocks.length > 0) {
         title = "Proven Formula Refined";
         if (!isCapped) {
-            advice.push(`Your physiology responds well to **volume-based training** (best gains at **${avgSuccessVol.toFixed(1)}h/week**).`);
+            if (responderProfile?.responderType === 'Volume') {
+                advice.push(`Your trained local model currently leans toward **volume-based training** with **${responderProfile.volumeResponderScore}% probability**.`);
+            } else {
+                advice.push(`Your physiology responds well to **volume-based training** (best gains at **${avgSuccessVol.toFixed(1)}h/week**).`);
+            }
             advice.push(`This plan maintains similar volume while tailoring zones to your **${goal || 'balanced'}** goal.`);
         } else {
             advice.push(`Your physiology responds well to volume, so we will build towards that safely.`);
         }
+    } else if (responderProfile?.responderType === 'Intensity') {
+        title = 'Intensity Responder Plan';
+        advice.push(`Your trained local model currently leans toward **intensity-focused training** with **${responderProfile.intensityResponderScore}% probability**.`);
+        advice.push(`This plan keeps enough aerobic support work to stay durable while emphasizing the harder work your history responds to best.`);
     }
 
     // Goal-specific guidance
@@ -654,7 +708,8 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
         description: advice.join('\n\n'),
         focusZones: zoneDistributionToChart(zoneDistribution),
         weeklyPlan,
-        fourWeekPlan
+        fourWeekPlan,
+        responderProfile
     };
 };
 

@@ -173,3 +173,33 @@ export const fetchGarminActivities = async (maxActivities = 200) => {
 
     return allActivities.slice(0, maxActivities);
 };
+
+/**
+ * Fetch per-trackpoint streams for a Garmin activity.
+ * @param {number|string} activityId Garmin activity id
+ * @returns {Array} [{ time, power, heart_rate, cadence, speed, distance }]
+ */
+export const fetchGarminActivityStreams = async (activityId) => {
+    const restored = await garminRestore();
+    if (!restored) {
+        throw new Error('Garmin session expired. Please login again from Profile.');
+    }
+
+    const proxyUrl = await getProxyUrl();
+    const res = await fetch(`${proxyUrl}/api/garmin/activities/${encodeURIComponent(activityId)}/streams`);
+
+    if (!res.ok) {
+        const err = await safeJson(res);
+        if (res.status === 401) {
+            await db.saveSettings('garmin_connected', false);
+        }
+        throw new Error(err.error || 'Failed to fetch Garmin activity streams');
+    }
+
+    const data = await safeJson(res);
+    if (data.tokens) {
+        await db.saveSettings('garmin_tokens', data.tokens);
+    }
+
+    return Array.isArray(data.streams) ? data.streams : [];
+};

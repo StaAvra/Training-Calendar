@@ -3,7 +3,7 @@ import { useUser } from '../context/UserContext';
 import { Save, User, Activity, Heart, Link as LinkIcon, CheckCircle, Watch, LogOut, Calendar, RefreshCw } from 'lucide-react';
 import { calculateZones } from '../utils/analysis';
 import { testProxyConnection, fetchStravaActivities, fetchStravaStreams } from '../utils/stravaApi';
-import { garminLogin, garminLogout, fetchGarminActivities } from '../utils/garminApi';
+import { garminLogin, garminLogout, fetchGarminActivities, fetchGarminActivityStreams } from '../utils/garminApi';
 import { db } from '../utils/db';
 import styles from './Profile.module.css';
 
@@ -189,17 +189,50 @@ const Profile = () => {
             const existingWorkouts = await db.getWorkouts(currentUser.id);
             let newCount = 0;
             let skippedCount = 0;
+            let backfilledCount = 0;
 
             for (const activity of activities) {
                 // Deduplication: check garmin_id, strava_id, or matching start_time
-                const isDuplicate = existingWorkouts.some(w =>
+                const existingWorkout = existingWorkouts.find(w =>
                     w.garmin_id === activity.garmin_id ||
                     isSameStartTime(w.start_time, activity.start_time)
                 );
-                if (isDuplicate) {
+
+                if (existingWorkout) {
+                    if (!Array.isArray(existingWorkout.streams) || existingWorkout.streams.length === 0) {
+                        try {
+                            const streams = await fetchGarminActivityStreams(activity.garmin_id);
+                            if (streams.length > 0) {
+                                const powerValues = streams.map(s => Number(s.power)).filter(v => Number.isFinite(v) && v > 0);
+                                const hrValues = streams.map(s => Number(s.heart_rate)).filter(v => Number.isFinite(v) && v > 0);
+
+                                await db.updateWorkout(existingWorkout.id, {
+                                    streams,
+                                    avg_power: existingWorkout.avg_power || (powerValues.length ? Math.round(powerValues.reduce((a, b) => a + b, 0) / powerValues.length) : 0),
+                                    max_power: existingWorkout.max_power || (powerValues.length ? Math.max(...powerValues) : 0),
+                                    avg_heart_rate: existingWorkout.avg_heart_rate || (hrValues.length ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length) : 0),
+                                    max_heart_rate: existingWorkout.max_heart_rate || (hrValues.length ? Math.max(...hrValues) : 0)
+                                });
+                                backfilledCount++;
+                            }
+                        } catch (streamErr) {
+                            console.warn(`Could not fetch streams for Garmin activity ${activity.garmin_id}:`, streamErr.message);
+                        }
+                    }
+
                     skippedCount++;
                     continue;
                 }
+
+                let streams = [];
+                try {
+                    streams = await fetchGarminActivityStreams(activity.garmin_id);
+                } catch (streamErr) {
+                    console.warn(`Could not fetch streams for Garmin activity ${activity.garmin_id}:`, streamErr.message);
+                }
+
+                const powerValues = streams.map(s => Number(s.power)).filter(v => Number.isFinite(v) && v > 0);
+                const hrValues = streams.map(s => Number(s.heart_rate)).filter(v => Number.isFinite(v) && v > 0);
 
                 await db.addWorkout({
                     userId: currentUser.id,
@@ -212,10 +245,10 @@ const Profile = () => {
                     total_elapsed_time: activity.total_elapsed_time,
                     total_distance: activity.total_distance,
                     avg_speed: activity.avg_speed,
-                    avg_power: activity.avg_power || 0,
-                    max_power: activity.max_power || 0,
-                    avg_heart_rate: activity.avg_heart_rate || 0,
-                    max_heart_rate: activity.max_heart_rate || 0,
+                    avg_power: activity.avg_power || (powerValues.length ? Math.round(powerValues.reduce((a, b) => a + b, 0) / powerValues.length) : 0),
+                    max_power: activity.max_power || (powerValues.length ? Math.max(...powerValues) : 0),
+                    avg_heart_rate: activity.avg_heart_rate || (hrValues.length ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length) : 0),
+                    max_heart_rate: activity.max_heart_rate || (hrValues.length ? Math.max(...hrValues) : 0),
                     normalized_power: activity.normalized_power || 0,
                     avg_cadence: activity.avg_cadence || 0,
                     calories: activity.calories || 0,
@@ -223,12 +256,12 @@ const Profile = () => {
                     training_stress_score: activity.training_stress_score || null,
                     intensity_factor: activity.intensity_factor || null,
                     power_curve: activity.power_curve || null,
-                    streams: [] // Garmin summary data — no second-by-second streams via this API
+                    streams
                 });
                 newCount++;
             }
 
-            setGarminSyncMessage(`Synced ${newCount} new activities! (${skippedCount} duplicates skipped)`);
+            setGarminSyncMessage(`Synced ${newCount} new activities. Backfilled ${backfilledCount} existing rides with streams. (${skippedCount} duplicates skipped)`);
             setTimeout(() => setGarminSyncMessage(''), 5000);
         } catch (err) {
             console.error('Garmin activity sync error:', err);

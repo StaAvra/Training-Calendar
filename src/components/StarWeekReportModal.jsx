@@ -30,7 +30,7 @@ const getDateKey = (date) => {
     }
 };
 
-const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, currentUser }) => {
+const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, currentUser, onOpenWorkout }) => {
     if (!isOpen || !endDate) return null;
 
     const ftp = currentUser?.profile?.ftp || 250;
@@ -104,6 +104,7 @@ const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, curr
 
                 return {
                     id: w.id || Math.random().toString(),
+                    sourceRideId: w.id || null,
                     title: w.title || 'Ride',
                     date: new Date(w.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
                     totalMinutes: Math.round(totalSec / 60),
@@ -211,6 +212,7 @@ const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, curr
                 .slice(0, 3)
                 .map(w => ({
                     id: w.id,
+                    rideId: w.id || null,
                     title: w.title || 'Ride',
                     date: new Date(w.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
                     np: Math.round(w.normalized_power || w.avg_power || 0),
@@ -389,6 +391,15 @@ const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, curr
                                     <span className={styles.btTitle}>{session.title}</span>
                                     <span className={styles.btDate}>{session.date}</span>
                                 </div>
+                                {session.rideId && (
+                                    <button
+                                        type="button"
+                                        className={styles.openRideBtn}
+                                        onClick={() => onOpenWorkout?.(session.rideId)}
+                                    >
+                                        Open ride
+                                    </button>
+                                )}
                                 <div className={styles.btMetrics}>
                                     <div className={styles.btMetric}>
                                         <span className={styles.btMetricValue}>{session.np}W</span>
@@ -429,6 +440,15 @@ const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, curr
                                         <span className={styles.workoutTitle}>{workout.title}</span>
                                         <span className={styles.workoutMeta}>{workout.date} • {workout.totalMinutes}m</span>
                                     </div>
+                                    {workout.sourceRideId && (
+                                        <button
+                                            type="button"
+                                            className={styles.openRideBtn}
+                                            onClick={() => onOpenWorkout?.(workout.sourceRideId)}
+                                        >
+                                            Open ride
+                                        </button>
+                                    )}
                                     <div className={styles.breakdownBar}>
                                         {workout.breakdown.map((item, idx) => (
                                             <div

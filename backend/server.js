@@ -191,6 +191,55 @@ app.get('/api/strava/user', async (req, res) => {
 let garminClient = null;
 let garminTokens = null;
 
+const extractTagNumber = (xml, tagName) => {
+    const re = new RegExp(`<${tagName}>([^<]+)<\\/${tagName}>`, 'i');
+    const m = xml.match(re);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+};
+
+const extractNamespacedTagNumber = (xml, tagName) => {
+    const re = new RegExp(`<(?:\\w+:)?${tagName}>([^<]+)<\\/(?:\\w+:)?${tagName}>`, 'i');
+    const m = xml.match(re);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+};
+
+const parseGarminTcxStreams = (tcxXml) => {
+    if (!tcxXml || typeof tcxXml !== 'string') return [];
+
+    const streams = [];
+    const trackpointRe = /<Trackpoint>([\s\S]*?)<\/Trackpoint>/gi;
+    let firstTs = null;
+    let match;
+
+    while ((match = trackpointRe.exec(tcxXml)) !== null) {
+        const trackpointXml = match[1];
+        const timeMatch = trackpointXml.match(/<Time>([^<]+)<\/Time>/i);
+        if (!timeMatch?.[1]) continue;
+
+        const timestampMs = Date.parse(timeMatch[1]);
+        if (!Number.isFinite(timestampMs)) continue;
+        if (firstTs === null) firstTs = timestampMs;
+
+        streams.push({
+            time: Math.max(0, Math.round((timestampMs - firstTs) / 1000)),
+            power: extractNamespacedTagNumber(trackpointXml, 'Watts'),
+            heart_rate: (() => {
+                const hrBlock = trackpointXml.match(/<HeartRateBpm>[\s\S]*?<\/HeartRateBpm>/i)?.[0] || '';
+                return extractTagNumber(hrBlock, 'Value');
+            })(),
+            cadence: extractTagNumber(trackpointXml, 'Cadence'),
+            speed: extractNamespacedTagNumber(trackpointXml, 'Speed'),
+            distance: extractTagNumber(trackpointXml, 'DistanceMeters')
+        });
+    }
+
+    return streams;
+};
+
 // 6. Garmin Login
 app.post('/api/garmin/login', async (req, res) => {
     const { username, password } = req.body;
@@ -367,6 +416,39 @@ app.get('/api/garmin/activities', async (req, res) => {
 });
 
 // 11. Garmin Logout
+app.get('/api/garmin/activities/:activityId/streams', async (req, res) => {
+    if (!garminClient) return res.status(401).json({ error: 'Garmin not connected. Please login first.' });
+
+    try {
+        const activityId = Number(req.params.activityId);
+        if (!Number.isFinite(activityId) || activityId <= 0) {
+            return res.status(400).json({ error: 'Invalid activityId.' });
+        }
+
+        const tcxXml = await garminClient.client.get(`${garminClient.url.DOWNLOAD_TCX}${activityId}`, {
+            responseType: 'text'
+        });
+
+        const streams = parseGarminTcxStreams(tcxXml);
+        try { garminTokens = garminClient.exportToken(); } catch (e) {}
+
+        return res.json({
+            found: streams.length > 0,
+            streams,
+            tokens: garminTokens
+        });
+    } catch (err) {
+        console.error('Garmin activity streams fetch error:', err.message);
+        if (err.message?.includes('401') || err.message?.includes('auth') || err.message?.includes('login')) {
+            garminClient = null;
+            garminTokens = null;
+            return res.status(401).json({ error: 'Garmin session expired. Please login again.' });
+        }
+        return res.status(500).json({ error: `Failed to fetch Garmin activity streams: ${err.message}` });
+    }
+});
+
+// 12. Garmin Logout
 app.post('/api/garmin/logout', (req, res) => {
     garminClient = null;
     garminTokens = null;

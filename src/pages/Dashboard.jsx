@@ -4,7 +4,7 @@ import { useUser } from '../context/UserContext';
 import { db } from '../utils/db';
 import { calculateCriticalPower, calculatePhenotype, calculateSessionDerivedFtp } from '../utils/analysis';
 import { fetchStravaActivities, fetchStravaStreams } from '../utils/stravaApi';
-import { fetchGarminActivities } from '../utils/garminApi';
+import { fetchGarminActivities, fetchGarminActivityStreams } from '../utils/garminApi';
 import FileDropzone from '../components/FileDropzone';
 import WorkoutPill from '../components/WorkoutPill';
 import Modal from '../components/Modal';
@@ -178,12 +178,47 @@ const Dashboard = () => {
             }
             const existingWorkouts = await db.getWorkouts(currentUser.id);
             let newCount = 0;
+            let backfilledCount = 0;
             for (const activity of activities) {
-                const isDup = existingWorkouts.some(w =>
+                const existingWorkout = existingWorkouts.find(w =>
                     w.garmin_id === activity.garmin_id ||
                     isSameStartTime(w.start_time, activity.start_time)
                 );
-                if (isDup) continue;
+
+                if (existingWorkout) {
+                    if (!Array.isArray(existingWorkout.streams) || existingWorkout.streams.length === 0) {
+                        try {
+                            const streams = await fetchGarminActivityStreams(activity.garmin_id);
+                            if (streams.length > 0) {
+                                const powerValues = streams.map(s => Number(s.power)).filter(v => Number.isFinite(v) && v > 0);
+                                const hrValues = streams.map(s => Number(s.heart_rate)).filter(v => Number.isFinite(v) && v > 0);
+
+                                await db.updateWorkout(existingWorkout.id, {
+                                    streams,
+                                    avg_power: existingWorkout.avg_power || (powerValues.length ? Math.round(powerValues.reduce((a, b) => a + b, 0) / powerValues.length) : 0),
+                                    max_power: existingWorkout.max_power || (powerValues.length ? Math.max(...powerValues) : 0),
+                                    avg_heart_rate: existingWorkout.avg_heart_rate || (hrValues.length ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length) : 0),
+                                    max_heart_rate: existingWorkout.max_heart_rate || (hrValues.length ? Math.max(...hrValues) : 0)
+                                });
+                                backfilledCount++;
+                            }
+                        } catch (streamErr) {
+                            console.warn(`Could not fetch streams for Garmin activity ${activity.garmin_id}:`, streamErr.message);
+                        }
+                    }
+                    continue;
+                }
+
+                let streams = [];
+                try {
+                    streams = await fetchGarminActivityStreams(activity.garmin_id);
+                } catch (streamErr) {
+                    console.warn(`Could not fetch streams for Garmin activity ${activity.garmin_id}:`, streamErr.message);
+                }
+
+                const powerValues = streams.map(s => Number(s.power)).filter(v => Number.isFinite(v) && v > 0);
+                const hrValues = streams.map(s => Number(s.heart_rate)).filter(v => Number.isFinite(v) && v > 0);
+
                 await db.addWorkout({
                     userId: currentUser.id,
                     title: activity.name,
@@ -195,10 +230,10 @@ const Dashboard = () => {
                     total_elapsed_time: activity.total_elapsed_time,
                     total_distance: activity.total_distance,
                     avg_speed: activity.avg_speed,
-                    avg_power: activity.avg_power || 0,
-                    max_power: activity.max_power || 0,
-                    avg_heart_rate: activity.avg_heart_rate || 0,
-                    max_heart_rate: activity.max_heart_rate || 0,
+                    avg_power: activity.avg_power || (powerValues.length ? Math.round(powerValues.reduce((a, b) => a + b, 0) / powerValues.length) : 0),
+                    max_power: activity.max_power || (powerValues.length ? Math.max(...powerValues) : 0),
+                    avg_heart_rate: activity.avg_heart_rate || (hrValues.length ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length) : 0),
+                    max_heart_rate: activity.max_heart_rate || (hrValues.length ? Math.max(...hrValues) : 0),
                     normalized_power: activity.normalized_power || 0,
                     avg_cadence: activity.avg_cadence || 0,
                     calories: activity.calories || 0,
@@ -206,12 +241,12 @@ const Dashboard = () => {
                     training_stress_score: activity.training_stress_score || null,
                     intensity_factor: activity.intensity_factor || null,
                     power_curve: activity.power_curve || null,
-                    streams: []
+                    streams
                 });
                 newCount++;
             }
             await db.saveSettings('garmin_last_sync', Math.floor(Date.now() / 1000));
-            if (!silent) setGarminSyncMsg(`Synced ${newCount} new Garmin ride${newCount !== 1 ? 's' : ''}!`);
+            if (!silent) setGarminSyncMsg(`Synced ${newCount} new Garmin ride${newCount !== 1 ? 's' : ''}; backfilled ${backfilledCount} existing ride${backfilledCount !== 1 ? 's' : ''} with streams.`);
             if (newCount > 0) await loadData();
         } catch (err) {
             console.error('Dashboard Garmin sync error:', err);

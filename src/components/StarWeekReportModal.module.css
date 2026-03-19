@@ -116,6 +116,22 @@
     border-radius: 4px;
 }
 
+.openRideBtn {
+    margin-top: 6px;
+    border: 1px solid var(--accent-primary);
+    background: transparent;
+    color: var(--accent-primary);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.openRideBtn:hover {
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+}
+
 .breakdownBar {
     display: flex;
     flex-wrap: wrap;

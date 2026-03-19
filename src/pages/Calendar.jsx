@@ -20,6 +20,7 @@ const Calendar = () => {
     const [improvements, setImprovements] = useState({});
     const [starDays, setStarDays] = useState(new Set()); // Days that complete a Star Period
     const [starReportDate, setStarReportDate] = useState(null);
+    const [starReportReturnDate, setStarReportReturnDate] = useState(null);
 
     // Modal State
     const [modalConfig, setModalConfig] = useState({
@@ -123,8 +124,29 @@ const Calendar = () => {
         });
     };
 
+    const handleOpenWorkoutFromStarReport = (workoutId) => {
+        const workout = workouts.find(w => w.id === workoutId);
+        if (!workout) return;
+
+        setStarReportReturnDate(starReportDate);
+        setStarReportDate(null);
+        setModalConfig({
+            isOpen: true,
+            type: 'workout',
+            data: workout,
+            title: workout.title || 'Workout Details'
+        });
+    };
+
     const closeModal = () => {
+        const shouldReturnToStarReport = modalConfig.type === 'workout' && !!starReportReturnDate;
+
         setModalConfig({ ...modalConfig, isOpen: false });
+
+        if (shouldReturnToStarReport) {
+            setStarReportDate(starReportReturnDate);
+            setStarReportReturnDate(null);
+        }
     };
 
     if (!currentUser) return null;
@@ -223,11 +245,15 @@ const Calendar = () => {
 
                 <StarWeekReportModal
                     isOpen={!!starReportDate}
-                    onClose={() => setStarReportDate(null)}
+                    onClose={() => {
+                        setStarReportDate(null);
+                        setStarReportReturnDate(null);
+                    }}
                     endDate={starReportDate}
                     workouts={workouts}
                     metrics={metrics}
                     currentUser={currentUser}
+                    onOpenWorkout={handleOpenWorkoutFromStarReport}
                 />
             </div>
         </div>
