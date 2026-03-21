@@ -494,6 +494,7 @@ const determineProgressionStrategy = (analysis, availabilityHours, avgSuccessVol
  */
 const applyWeeklyProgression = (baseSession, weekNumber, progressionType) => {
     const volumeMultipliers = [1.0, 1.10, 1.15, 0.80]; // Volume progression + recovery week
+    const intensityVolumeMultipliers = [1.0, 1.03, 1.05, 0.85]; // Keep volumes steadier for intensity blocks
     const intensityBoosts = [0, 0, 5, -15]; // Intensity: +5% w3, -15% w4 (easier recovery)
 
     const session = { ...baseSession };
@@ -502,7 +503,10 @@ const applyWeeklyProgression = (baseSession, weekNumber, progressionType) => {
         session.hoursPerSession = (session.hoursPerSession * volumeMultipliers[weekNumber - 1]);
         session.totalWeekly = session.totalWeekly * volumeMultipliers[weekNumber - 1];
     } else {
-        // Intensity progression: keep volume similar, adjust focus intensity
+        // Intensity progression: small volume changes + intensity emphasis
+        const mult = intensityVolumeMultipliers[weekNumber - 1];
+        session.hoursPerSession = session.hoursPerSession * mult;
+        session.totalWeekly = session.totalWeekly * mult;
         session.intensityBoost = intensityBoosts[weekNumber - 1];
     }
 
@@ -515,18 +519,15 @@ const applyWeeklyProgression = (baseSession, weekNumber, progressionType) => {
  */
 const generateFourWeekPlan = (baseWeeklyPlan, analysis, availabilityHours, avgSuccessVol, progressionType) => {
     const weeks = [];
-    const progressionMultipliers = [1.0, 1.10, 1.15, 0.80];
 
     for (let week = 1; week <= 4; week++) {
-        const multiplier = progressionMultipliers[week - 1];
-
         // Apply progression to each session
         const weekSessions = baseWeeklyPlan.sessions.map(session =>
             applyWeeklyProgression(session, week, progressionType)
         );
 
-        // Calculate totals for the week
-        const weeklyHours = baseWeeklyPlan.totalWeeklyHours * multiplier;
+        // Calculate totals from progressed sessions to keep cards internally consistent
+        const weeklyHours = weekSessions.reduce((acc, s) => acc + (s.totalWeekly || 0), 0);
 
         // Determine focus label
         let focus = '';

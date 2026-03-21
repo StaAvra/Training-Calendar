@@ -8,6 +8,13 @@ import { TrendingUp, Clock, Target, ArrowRight, Brain, Zap, Activity } from 'luc
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line } from 'recharts';
 import styles from './FutureTraining.module.css';
 
+const formatHoursToHrMin = (hours) => {
+    const totalMinutes = Math.round((hours || 0) * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    return `${h}:${m.toString().padStart(2, '0')}`;
+};
+
 const FutureTraining = () => {
     const { currentUser } = useUser();
     const [workouts, setWorkouts] = useState([]);
@@ -337,16 +344,16 @@ const FutureTraining = () => {
                                                         {session.count}x
                                                     </div>
                                                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                                        {session.hoursPerSession.toFixed(1)}h each
+                                                        {formatHoursToHrMin(session.hoursPerSession)} each
                                                     </div>
                                                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', fontWeight: 500 }}>
-                                                        {session.totalWeekly.toFixed(1)}h total
+                                                        {formatHoursToHrMin(session.totalWeekly)} total
                                                     </div>
                                                 </div>
                                             ))}
                                         </div>
                                         <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: '6px', fontSize: '0.9rem' }}>
-                                            <strong>Total Weekly:</strong> {recommendation.weeklyPlan.totalWeeklyHours}h across {recommendation.weeklyPlan.sessionsPerWeek} sessions
+                                            <strong>Total Weekly:</strong> {formatHoursToHrMin(recommendation.weeklyPlan.totalWeeklyHours)} across {recommendation.weeklyPlan.sessionsPerWeek} sessions
                                         </div>
                                     </div>
                                 )}
@@ -404,9 +411,12 @@ const FutureTraining = () => {
                                                     <div style={{ marginBottom: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem' }}>
                                                         {week.sessions.map((session, j) => (
                                                             <div key={j} style={{ marginBottom: '0.5rem', fontSize: '0.8rem' }}>
-                                                                <span style={{ color: 'var(--text-secondary)' }}>{session.count}x {session.type}:</span>
+                                                                <span style={{ color: 'var(--text-secondary)' }}>{session.count}x {session.type}</span>
                                                                 <span style={{ fontWeight: 500, marginLeft: '0.25rem' }}>
-                                                                    {session.totalWeekly.toFixed(1)}h
+                                                                    {formatHoursToHrMin(session.hoursPerSession)} each
+                                                                </span>
+                                                                <span style={{ color: 'var(--text-secondary)', marginLeft: '0.25rem' }}>
+                                                                    ({formatHoursToHrMin(session.totalWeekly)} total)
                                                                 </span>
                                                             </div>
                                                         ))}
@@ -425,7 +435,7 @@ const FutureTraining = () => {
                                                             Total Hours
                                                         </div>
                                                         <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--accent-primary)' }}>
-                                                            {week.totalWeeklyHours}h
+                                                            {formatHoursToHrMin(week.totalWeeklyHours)}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -433,7 +443,7 @@ const FutureTraining = () => {
                                         </div>
 
                                         <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'var(--bg-secondary)', borderRadius: '6px', fontSize: '0.9rem' }}>
-                                            <strong>4-Week Total:</strong> {recommendation.fourWeekPlan.totalPlanHours}h
+                                            <strong>4-Week Total:</strong> {formatHoursToHrMin(recommendation.fourWeekPlan.totalPlanHours)}
                                         </div>
                                     </div>
                                 )}
