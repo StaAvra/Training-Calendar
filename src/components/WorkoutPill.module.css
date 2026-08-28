@@ -9,19 +9,48 @@
     justify-content: space-between;
     gap: 8px;
     color: var(--text-primary);
-    white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
     cursor: pointer;
     transition: filter 0.2s;
     position: relative;
     /* For badges if absolute */
 }
 
+.leftBlock {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.intervalSummary {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    white-space: normal;
+    overflow: hidden;
+    text-overflow: clip;
+    line-height: 1.25;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    max-width: none;
+}
+
+.dragHint {
+    font-size: 0.64rem;
+    color: var(--accent-primary);
+    opacity: 0.9;
+}
+
 .goldBorder {
     border-color: #fbbf24;
     /* Gold */
     background: linear-gradient(to right, rgba(251, 191, 36, 0.1), var(--bg-tertiary));
+}
+
+.linkedBorder {
+    border-color: #38bdf8;
+    /* Cyan */
+    background: linear-gradient(to right, rgba(56, 189, 248, 0.08), var(--bg-tertiary));
 }
 
 .greenBorder {
@@ -33,10 +62,20 @@
     filter: brightness(1.1);
 }
 
+.draggablePill {
+    cursor: grab;
+}
+
+.draggablePill:active {
+    cursor: grabbing;
+}
+
 .pillPower {
     color: var(--text-secondary);
     font-size: 0.8em;
     font-weight: 500;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .timeProp {
@@ -64,4 +103,13 @@
     /* Green */
     border-radius: 50%;
     box-shadow: 0 0 4px rgba(34, 197, 94, 0.6);
+}
+
+.badgeLinked {
+    width: 6px;
+    height: 6px;
+    background-color: #38bdf8;
+    /* Cyan */
+    border-radius: 50%;
+    box-shadow: 0 0 4px rgba(56, 189, 248, 0.6);
 }

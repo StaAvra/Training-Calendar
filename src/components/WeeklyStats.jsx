@@ -1,5 +1,4 @@
 import React from 'react';
-import { format, startOfWeek, endOfWeek, isSameDay } from 'date-fns';
 import { Clock, Moon, Heart, Activity } from 'lucide-react';
 import { getLocalDayKey } from '../utils/db';
 import { calculateTssWithMetadata } from '../utils/analysis';
@@ -16,25 +15,46 @@ const WeeklyStats = ({ weekIndex, weekDays, workouts, metrics, currentUser }) =>
     let hrvCount = 0;
 
     const ftp = currentUser?.profile?.ftp || 250;
+    const nowTs = Date.now();
+
+    const getCompletionStatus = (workout) => {
+        if (!workout) return 'planned';
+        if (workout.completion_status) return workout.completion_status;
+        if (workout.completed === true) return 'completed';
+
+        const actual = Number(workout.actual_tss);
+        if (Number.isFinite(actual) && actual > 0) return 'completed';
+
+        const ts = new Date(workout.date || workout.start_time).getTime();
+        const isFuture = Number.isFinite(ts) && ts > nowTs;
+        if (workout.planned === true || workout.plan_source === 'four_week' || isFuture) return 'planned';
+
+        return 'completed';
+    };
+
+    const resolveWorkoutTss = (workout) => {
+        if (getCompletionStatus(workout) !== 'completed') return 0;
+
+        const actual = Number(workout.actual_tss);
+        if (Number.isFinite(actual) && actual > 0) return actual;
+
+        const recalculated = Number(calculateTssWithMetadata(workout, ftp)?.tss);
+        if (Number.isFinite(recalculated) && recalculated > 0) return recalculated;
+
+        const stored = Number(workout.training_stress_score);
+        if (Number.isFinite(stored) && stored > 0) return stored;
+
+        return 0;
+    };
 
     weekDays.forEach(day => {
         const dayKey = getLocalDayKey(day);
         // Workouts
         const daysWorkouts = workouts.filter(w => getLocalDayKey(w.date) === dayKey);
         daysWorkouts.forEach(w => {
+            if (getCompletionStatus(w) !== 'completed') return;
             totalSeconds += w.total_elapsed_time || 0;
-
-            // Get TSS directly or calculate HR-based estimate if missing
-            let tss = w.training_stress_score || 0;
-
-            if (!tss && w.avg_heart_rate) {
-                const result = calculateTssWithMetadata(w, ftp);
-                if (result && result.tss) {
-                    tss = result.tss;
-                }
-            }
-
-            totalTss += tss;
+            totalTss += resolveWorkoutTss(w);
         });
 
         // Metrics

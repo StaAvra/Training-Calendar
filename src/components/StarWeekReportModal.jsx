@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { subDays, isWithinInterval, startOfDay, endOfDay, max } from 'date-fns';
 import { X, Trophy, Activity, Moon, Heart, AlertTriangle, Zap } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { calculateTimeInZones, calculateCriticalPower, calculateEstimatedFtp, classifyWorkout } from '../utils/analysis';
+import { calculateTimeInZones, calculateCriticalPower, calculateEstimatedFtp, classifyWorkout, calculateTssWithMetadata } from '../utils/analysis';
 import { getLocalDayKey } from '../utils/db';
 import styles from './StarWeekReportModal.module.css';
 
@@ -34,6 +34,19 @@ const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, curr
     if (!isOpen || !endDate) return null;
 
     const ftp = currentUser?.profile?.ftp || 250;
+
+    const resolveTss = (workout) => {
+        const actual = Number(workout?.actual_tss);
+        if (Number.isFinite(actual) && actual > 0) return actual;
+
+        const recalculated = Number(calculateTssWithMetadata(workout, ftp)?.tss);
+        if (Number.isFinite(recalculated) && recalculated > 0) return recalculated;
+
+        const stored = Number(workout?.training_stress_score);
+        if (Number.isFinite(stored) && stored > 0) return stored;
+
+        return 0;
+    };
 
     // Stable Date Calculations
     const { starStart, starEnd, historyStart, historyEnd } = useMemo(() => {
@@ -205,8 +218,8 @@ const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, curr
             return [...histWorkouts]
                 .sort((a, b) => {
                     // Scoring for "breakthrough"
-                    const scoreA = (a.normalized_power || 0) * (a.intensity_factor || 0) + (a.training_stress_score || 0);
-                    const scoreB = (b.normalized_power || 0) * (b.intensity_factor || 0) + (b.training_stress_score || 0);
+                    const scoreA = (a.normalized_power || a.avg_power || 0) * (a.intensity_factor || 0) + resolveTss(a);
+                    const scoreB = (b.normalized_power || b.avg_power || 0) * (b.intensity_factor || 0) + resolveTss(b);
                     return scoreB - scoreA;
                 })
                 .slice(0, 3)
@@ -216,7 +229,7 @@ const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, curr
                     title: w.title || 'Ride',
                     date: new Date(w.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
                     np: Math.round(w.normalized_power || w.avg_power || 0),
-                    tss: Math.round(w.training_stress_score || 0),
+                    tss: Math.round(resolveTss(w)),
                     if: w.intensity_factor || '-',
                     bestInterval: w.power_curve?.duration_5m ? `${w.power_curve.duration_5m}W (5m)` : null
                 }));
@@ -300,7 +313,7 @@ const StarWeekReportModal = ({ isOpen, onClose, endDate, workouts, metrics, curr
             const avgHrv = validHrv.length ? Math.round(validHrv.reduce((acc, m) => acc + (Number(m.hrv) || 0), 0) / validHrv.length) : '-';
 
             // 4. Totals
-            const totalTss = hWorkouts.reduce((acc, w) => acc + (Number(w.training_stress_score) || 0), 0);
+            const totalTss = hWorkouts.reduce((acc, w) => acc + resolveTss(w), 0);
             const totalDuration = hWorkouts.reduce((acc, w) => acc + (Number(w.total_elapsed_time) || 0), 0);
 
             const avgWeeklyTss = Math.round(totalTss / 6);

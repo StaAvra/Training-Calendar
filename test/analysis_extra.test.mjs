@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateCriticalPower, calculateCriticalHeartRate, calculateNormalizedPower } from '../src/utils/analysis.js';
+import { calculateCriticalPower, calculateCriticalHeartRate, calculateNormalizedPower, calculateTrainingDNA } from '../src/utils/analysis.js';
 
 test('calculateCriticalPower with known values', () => {
   const powerCurve = { duration_3m: 400, duration_20m: 300 };
@@ -27,4 +27,44 @@ test('calculateNormalizedPower returns same value for constant stream', () => {
   for (let i=0;i<60;i++) streams.push({ power: 200 });
   const np = calculateNormalizedPower(streams);
   assert.strictEqual(np, 200);
+});
+
+test('calculateTrainingDNA ignores future planned rides for 12-week averages', () => {
+  const now = Date.now();
+  const completedPast = {
+    date: new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString(),
+    completion_status: 'completed',
+    completed: true,
+    total_elapsed_time: 3600,
+    training_stress_score: 80,
+    avg_power: 180,
+    normalized_power: 190,
+  };
+
+  const futurePlanned = {
+    date: new Date(now + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    completion_status: 'planned',
+    planned: true,
+    completed: false,
+    total_elapsed_time: 4 * 3600,
+    training_stress_score: 300,
+    avg_power: 220,
+    normalized_power: 230,
+  };
+
+  const dnaWithoutFuture = calculateTrainingDNA([completedPast], [], 250);
+  const dnaWithFuture = calculateTrainingDNA([completedPast, futurePlanned], [], 250);
+
+  assert.ok(dnaWithoutFuture?.longTermAverages, 'Expected long-term averages for baseline data');
+  assert.ok(dnaWithFuture?.longTermAverages, 'Expected long-term averages with mixed data');
+  assert.strictEqual(
+    dnaWithFuture.longTermAverages.hrsPerWeek,
+    dnaWithoutFuture.longTermAverages.hrsPerWeek,
+    'Future planned rides should not affect 12-week average volume'
+  );
+  assert.strictEqual(
+    dnaWithFuture.longTermAverages.tssPerWeek,
+    dnaWithoutFuture.longTermAverages.tssPerWeek,
+    'Future planned rides should not affect 12-week average TSS'
+  );
 });

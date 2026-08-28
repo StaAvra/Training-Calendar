@@ -303,6 +303,7 @@ When analyzing a workout, the app resolves which FTP to use:
    - **Priority 1:** ≥5 anaerobic intervals → Anaerobic
    - **Priority 1:** ≥3 VO2 intervals → VO2Max
    - **Priority 2:** ≥2 threshold intervals OR ≥15min threshold time → Threshold
+   - **Priority 2b:** Long easy-dominant rides (>=3h with >=65% Recovery+Endurance, Tempo <=25%, Threshold <=10%, and limited high intensity) → Endurance
    - **Priority 3:** ≥1 tempo interval OR ≥30min tempo time → Tempo
    - **Priority 4:** Fallback to IF-based classification
 

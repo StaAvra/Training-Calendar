@@ -148,8 +148,9 @@ export const calculateTimeInZones = (streams, ftp) => {
     const distribution = zones.map(z => ({ ...z, time: 0 }));
 
     streams.forEach(point => {
-        if (typeof point.power === 'number') {
-            const zoneIndex = zones.findIndex(z => point.power >= z.min && point.power < z.max);
+        const power = Number(point?.power);
+        if (Number.isFinite(power)) {
+            const zoneIndex = zones.findIndex(z => power >= z.min && power < z.max);
             if (zoneIndex !== -1) {
                 distribution[zoneIndex].time += 1;
             }
@@ -195,11 +196,107 @@ export const calculateTimeInHRZones = (streams, maxHr) => {
     return distribution;
 };
 
+const POWER_CURVE_DURATIONS = {
+    duration_5s: 5,
+    duration_10s: 10,
+    duration_1m: 60,
+    duration_2m: 120,
+    duration_3m: 180,
+    duration_5m: 300,
+    duration_8m: 480,
+    duration_10m: 600,
+    duration_12m: 720,
+    duration_15m: 900,
+    duration_20m: 1200,
+    duration_60m: 3600,
+};
+
+const calculateRollingAverageMax = (streams, durationSeconds, field) => {
+    if (!Array.isArray(streams) || streams.length < durationSeconds) return null;
+
+    let currentSum = 0;
+    for (let i = 0; i < durationSeconds; i++) {
+        currentSum += Number(streams[i]?.[field]) || 0;
+    }
+
+    let maxValue = currentSum / durationSeconds;
+
+    for (let i = durationSeconds; i < streams.length; i++) {
+        currentSum += Number(streams[i]?.[field]) || 0;
+        currentSum -= Number(streams[i - durationSeconds]?.[field]) || 0;
+        const avg = currentSum / durationSeconds;
+        if (avg > maxValue) maxValue = avg;
+    }
+
+    return Math.round(maxValue);
+};
+
+export const buildCurveFromStreams = (streams, field = 'power') => {
+    if (!Array.isArray(streams) || streams.length === 0) return null;
+
+    const curve = Object.fromEntries(
+        Object.entries(POWER_CURVE_DURATIONS).map(([key, seconds]) => [
+            key,
+            calculateRollingAverageMax(streams, seconds, field),
+        ])
+    );
+
+    return Object.values(curve).some(value => value != null) ? curve : null;
+};
+
+export const getWorkoutPowerCurve = (workout) => {
+    if (!workout) return null;
+    const fromStreams = buildCurveFromStreams(workout.streams, 'power');
+    if (!workout.power_curve) return fromStreams;
+    if (!fromStreams) return workout.power_curve;
+
+    // Garmin's activity summary API has no 3-min bucket (and may omit others), so
+    // fill any missing/zero durations using values derived from the raw streams.
+    const merged = {};
+    new Set([...Object.keys(workout.power_curve), ...Object.keys(fromStreams)]).forEach(key => {
+        const apiValue = workout.power_curve[key];
+        merged[key] = (apiValue != null && apiValue > 0) ? apiValue : fromStreams[key];
+    });
+    return merged;
+};
+
+export const getWorkoutHeartRateCurve = (workout) => {
+    if (!workout) return null;
+    const fromStreams = buildCurveFromStreams(workout.streams, 'heart_rate');
+    if (!workout.heart_rate_curve) return fromStreams;
+    if (!fromStreams) return workout.heart_rate_curve;
+
+    const merged = {};
+    new Set([...Object.keys(workout.heart_rate_curve), ...Object.keys(fromStreams)]).forEach(key => {
+        const apiValue = workout.heart_rate_curve[key];
+        merged[key] = (apiValue != null && apiValue > 0) ? apiValue : fromStreams[key];
+    });
+    return merged;
+};
+
 export const calculateIntensityFactor = (workout, ftp) => {
     // IF = NP / FTP
     const np = workout.normalized_power || workout.avg_power;
     if (!np || !ftp) return null;
     return (np / ftp).toFixed(2);
+};
+
+export const getTssDurationSeconds = (workout) => {
+    if (!workout) return 0;
+
+    const streams = Array.isArray(workout.streams) ? workout.streams : [];
+    if (streams.length > 0) {
+        const poweredSamples = streams.filter(point => point && point.power !== null && point.power !== undefined && Number.isFinite(Number(point.power))).length;
+        if (poweredSamples > 0) return poweredSamples;
+    }
+
+    const moving = Number(workout.moving_time);
+    if (Number.isFinite(moving) && moving > 0) return moving;
+
+    const elapsed = Number(workout.total_elapsed_time);
+    if (Number.isFinite(elapsed) && elapsed > 0) return elapsed;
+
+    return 0;
 };
 
 export const calculateTSS = (workout, ftp) => {
@@ -209,7 +306,7 @@ export const calculateTSS = (workout, ftp) => {
     // => (s * NP * (NP/FTP)) / (FTP * 36) ...
     // Simplified: (s * NP * IF) / (FTP * 36)
 
-    const s = workout.total_elapsed_time;
+    const s = getTssDurationSeconds(workout);
     const np = workout.normalized_power || workout.avg_power;
 
     if (!s) return null;
@@ -244,7 +341,7 @@ export const calculateTSS = (workout, ftp) => {
  * Returns { tss, method, confidence, ifEstimate }
  */
 export const calculateTssWithMetadata = (workout, ftp) => {
-    const s = workout.total_elapsed_time;
+    const s = getTssDurationSeconds(workout);
     const np = workout.normalized_power || workout.avg_power;
 
     if (!s) return { tss: null, method: 'invalid', confidence: 0 };
@@ -368,7 +465,14 @@ export const estimateTssFromIf = (durationSeconds, ifEstimate, confFromIf = 0.5)
 export const checkFtpImprovement = (workouts, currentFtp, profile = {}) => {
     if (!workouts || workouts.length === 0) return null;
 
-    const bestRide = workouts.reduce((max, w) => {
+    const nowTs = Date.now();
+    const eligibleWorkouts = workouts.filter(w => {
+        const rideTs = new Date(w?.date).getTime();
+        return Number.isFinite(rideTs) && rideTs <= nowTs;
+    });
+    if (eligibleWorkouts.length === 0) return null;
+
+    const bestRide = eligibleWorkouts.reduce((max, w) => {
         if (w.total_elapsed_time > 1200 && (w.normalized_power || w.avg_power) > (max?.normalized_power || max?.avg_power || 0)) {
             return w;
         }
@@ -387,7 +491,7 @@ export const checkFtpImprovement = (workouts, currentFtp, profile = {}) => {
     // Determine Critical HR (CHR) from available hr_curve data, else fallback to profile.maxHr (~90%),
     // else fallback to observed max avg_heart_rate * 0.95. This avoids using a hard-coded 175 bpm.
     let estimatedChr = null;
-    for (const w of workouts) {
+    for (const w of eligibleWorkouts) {
         if (w.hr_curve) {
             const chrObj = calculateCriticalHeartRate(w.hr_curve);
             if (chrObj && chrObj.chr) { estimatedChr = chrObj.chr; break; }
@@ -397,11 +501,11 @@ export const checkFtpImprovement = (workouts, currentFtp, profile = {}) => {
         estimatedChr = Math.round(profile.maxHr * 0.90);
     }
     if (!estimatedChr) {
-        const maxObserved = workouts.reduce((m, w) => Math.max(m, w.avg_heart_rate || 0), 0);
+        const maxObserved = eligibleWorkouts.reduce((m, w) => Math.max(m, w.avg_heart_rate || 0), 0);
         if (maxObserved > 0) estimatedChr = Math.round(maxObserved * 0.95);
     }
 
-    const thresholdRide = workouts.find(w =>
+    const thresholdRide = eligibleWorkouts.find(w =>
         w.total_elapsed_time > 600 &&
         (w.avg_power > currentFtp) &&
         (w.avg_heart_rate && estimatedChr && w.avg_heart_rate < estimatedChr)
@@ -977,6 +1081,23 @@ export const classifyWorkout = (workout, ftp) => {
     // --- Aggregate High-Intensity Zone Time ---
     // Total raw seconds at VO2max power or above (Z5 + Z6 + Z7)
     const highIntensityTime = (timeInZones.VO2Max || 0) + (timeInZones.Anaerobic || 0);
+    const totalTime = streams.length;
+    const lowIntensityTime = (timeInZones.Recovery || 0) + (timeInZones.Endurance || 0);
+    const lowIntensityShare = totalTime > 0 ? lowIntensityTime / totalTime : 0;
+    const tempoShare = totalTime > 0 ? (timeInZones.Tempo || 0) / totalTime : 0;
+    const thresholdShare = totalTime > 0 ? (timeInZones.Threshold || 0) / totalTime : 0;
+    const highIntensityShare = totalTime > 0 ? highIntensityTime / totalTime : 0;
+
+    // Long rides that are dominated by low-intensity riding should remain Endurance,
+    // even when they accumulate enough total Tempo minutes from terrain/group dynamics.
+    const isLongEasyDominantRide = (
+        totalTime >= 3 * 3600
+        && lowIntensityShare >= 0.65
+        && tempoShare <= 0.25
+        && thresholdShare <= 0.10
+        && highIntensityTime <= 1200
+        && highIntensityShare <= 0.08
+    );
 
     // --- Final Classification Logic ---
 
@@ -995,6 +1116,9 @@ export const classifyWorkout = (workout, ftp) => {
     // OR > 20m raw time in Z4 AND Z4 time > Z3 time (to distinguish from hard tempo)
     if (thresholdCount >= 2 || totalThresholdTime >= 900 || (timeInZones.Threshold >= 1200 && timeInZones.Threshold > timeInZones.Tempo)) return 'Threshold';
 
+    // Priority 2b: Endurance-dominant long rides
+    if (isLongEasyDominantRide) return 'Endurance';
+
     // Priority 3: Tempo
     // > 1 interval OR > 30m time in identified tempo blocks
     // OR > 30m raw time in Z3
@@ -1012,37 +1136,70 @@ export const classifyWorkout = (workout, ftp) => {
 export const calculateTrainingDNA = (workouts, metrics, ftp) => {
     if (!workouts) return null;
     const safeFtp = ftp || 250; // Default FTP if missing
+    const now = new Date();
+
+    const completedHistoricalWorkouts = (workouts || []).filter((w) => {
+        const d = new Date(w.date);
+        if (Number.isNaN(d.getTime()) || d > now) return false;
+
+        const isStillPlanned = (w.planned === true || w.completion_status === 'planned')
+            && w.completed !== true
+            && w.completion_status !== 'completed';
+        if (isStillPlanned) return false;
+
+        return Number(w.total_elapsed_time || 0) > 0;
+    });
 
     const threeMonthsAgo = subDays(new Date(), 90);
-    const recentWorkouts = workouts.filter(w => new Date(w.date) >= threeMonthsAgo);
+    const recentWorkouts = completedHistoricalWorkouts.filter(w => {
+        const d = new Date(w.date);
+        return d >= threeMonthsAgo && d <= now;
+    });
 
     // 1. Group by weeks (even if empty, we continue to generate trends)
     const weeksMap = {};
     recentWorkouts.forEach(w => {
         const dObj = new Date(w.date);
         if (isNaN(dObj.getTime())) return;
-        const date = startOfWeek(dObj);
+        const date = startOfWeek(dObj, { weekStartsOn: 1 });
         const key = date.toISOString();
         if (!weeksMap[key]) weeksMap[key] = [];
         weeksMap[key].push(w);
     });
 
-    // 2. Find Best Week (>= 2 workouts, highest avg feeling)
+    // 2. Find Best Week (>= 2 workouts) using composite score: feeling + TSS contribution.
+    //    Pure feeling-only selection fails when feelings aren't logged (all default to 0,
+    //    causing the first qualifying week to always win). Blending with TSS ensures a
+    //    high-training-load week is preferred when feelings are absent or tied.
     let bestWeekKey = null;
-    let maxAvgFeeling = -1;
+    let maxAvgFeeling = -1; // kept for display purposes
+    let maxScore = -1;
+
+    // Find max weekly TSS for normalization
+    let maxWeeklyTss = 0;
+    Object.keys(weeksMap).forEach(key => {
+        const weekRides = weeksMap[key];
+        if (weekRides.length < 2) return;
+        const weekTss = weekRides.reduce((acc, r) => acc + (r.training_stress_score || 0), 0);
+        if (weekTss > maxWeeklyTss) maxWeeklyTss = weekTss;
+    });
 
     Object.keys(weeksMap).forEach(key => {
         const weekRides = weeksMap[key];
         if (weekRides.length < 2) return;
 
         const avgFeeling = weekRides.reduce((acc, r) => acc + (r.feeling_strength || 0), 0) / weekRides.length;
-        if (avgFeeling > maxAvgFeeling) {
+        const weekTss = weekRides.reduce((acc, r) => acc + (r.training_stress_score || 0), 0);
+        const tssNorm = maxWeeklyTss > 0 ? weekTss / maxWeeklyTss : 0;
+        // Composite: feeling weighted 60%, normalised TSS 40% (both scaled 0-10)
+        const score = (avgFeeling / 10) * 6 + tssNorm * 4;
+
+        if (score > maxScore) {
+            maxScore = score;
             maxAvgFeeling = avgFeeling;
             bestWeekKey = key;
         }
     });
-
-    // if (!bestWeekKey) return null; // Continue to calculate trends anyway
 
     // 3. Analyze 4 weeks prior to bestWeekKey - MOVED DOWN
     let bestWeekStart = null;
@@ -1052,12 +1209,14 @@ export const calculateTrainingDNA = (workouts, metrics, ftp) => {
 
     // 5. Calculate Long-Term Trends (Last 12 Weeks)
     const twelveWeeksAgo = subDays(new Date(), 84);
-    const workouts12w = workouts.filter(w => new Date(w.date) >= twelveWeeksAgo);
+    const workouts12w = completedHistoricalWorkouts.filter(w => {
+        const d = new Date(w.date);
+        return d >= twelveWeeksAgo && d <= now;
+    });
 
     // Generate weekly buckets (1-12)
     const weeklyTrends = [];
-    let currentWeekStart = startOfWeek(twelveWeeksAgo);
-    const now = new Date();
+    let currentWeekStart = startOfWeek(twelveWeeksAgo, { weekStartsOn: 1 });
 
     while (currentWeekStart <= now) {
         const currentWeekEnd = endOfDay(subDays(addWeeks(currentWeekStart, 1), 1)); // End on Sunday? Or just < next Start
@@ -1126,12 +1285,12 @@ export const calculateTrainingDNA = (workouts, metrics, ftp) => {
         const lookupEnd = subDays(bestWeekStart, 1);
         const lookupStart = subDays(lookupEnd, 27); // 28 days total
 
-        const priorWorkouts = workouts.filter(w => {
+        const priorWorkouts = completedHistoricalWorkouts.filter(w => {
             const d = new Date(w.date);
             return d >= lookupStart && d <= lookupEnd;
         });
 
-        if (priorWorkouts.length >= 10) {
+        if (priorWorkouts.length >= 8) {
             const priorMetrics = metrics.filter(m => {
                 const d = new Date(m.date);
                 return d >= lookupStart && d <= lookupEnd;
@@ -1147,8 +1306,8 @@ export const calculateTrainingDNA = (workouts, metrics, ftp) => {
             const validHrv = priorMetrics.filter(m => (m.hrv || 0) > 0);
             const avgHrv = validHrv.length ? (validHrv.reduce((acc, m) => acc + Number(m.hrv), 0) / validHrv.length) : null;
 
-            // Session Types Distribution
-            const typeCounts = {
+            // Session Types Distribution (hours per week)
+            const typeHours = {
                 Recovery: 0,
                 Endurance: 0,
                 Tempo: 0,
@@ -1159,7 +1318,7 @@ export const calculateTrainingDNA = (workouts, metrics, ftp) => {
 
             priorWorkouts.forEach(w => {
                 const label = classifyWorkout(w, safeFtp);
-                if (typeCounts[label] !== undefined) typeCounts[label]++;
+                if (typeHours[label] !== undefined) typeHours[label] += (w.total_elapsed_time || 0) / 3600;
             });
 
             result.winningFormula = {
@@ -1168,12 +1327,12 @@ export const calculateTrainingDNA = (workouts, metrics, ftp) => {
                 sleepPerDay: avgSleep ? avgSleep.toFixed(1) : '-',
                 hrvPerDay: avgHrv ? Math.round(avgHrv) : '-',
                 distribution: {
-                    Recovery: (typeCounts.Recovery / 4).toFixed(1),
-                    Endurance: (typeCounts.Endurance / 4).toFixed(1),
-                    Tempo: (typeCounts.Tempo / 4).toFixed(1),
-                    Threshold: (typeCounts.Threshold / 4).toFixed(1),
-                    VO2Max: (typeCounts.VO2Max / 4).toFixed(1),
-                    Anaerobic: (typeCounts.Anaerobic / 4).toFixed(1)
+                    Recovery: (typeHours.Recovery / 4).toFixed(1),
+                    Endurance: (typeHours.Endurance / 4).toFixed(1),
+                    Tempo: (typeHours.Tempo / 4).toFixed(1),
+                    Threshold: (typeHours.Threshold / 4).toFixed(1),
+                    VO2Max: (typeHours.VO2Max / 4).toFixed(1),
+                    Anaerobic: (typeHours.Anaerobic / 4).toFixed(1)
                 }
             };
 

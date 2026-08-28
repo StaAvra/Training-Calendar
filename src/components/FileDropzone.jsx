@@ -4,6 +4,7 @@ import { Upload, FileCheck, CircleAlert, RefreshCw } from 'lucide-react';
 import { parseFitFile } from '../utils/fitParser';
 import { fetchStravaActivities, fetchStravaStreams, testProxyConnection } from '../utils/stravaApi';
 import { db } from '../utils/db';
+import { normalizeSyncMode, getDefaultBackfillEpochSeconds } from '../utils/syncService';
 import styles from './FileDropzone.module.css';
 
 const FileDropzone = ({ onUploadComplete }) => {
@@ -59,6 +60,7 @@ const FileDropzone = ({ onUploadComplete }) => {
                 userId: currentUser.id,
                 title: `Ride on ${new Date(parsedData.start_time).toLocaleDateString()}`,
                 date: parsedData.start_time,
+                source: 'fit_file',
                 ...parsedData,
                 created_at: new Date().toISOString()
             };
@@ -112,7 +114,7 @@ const FileDropzone = ({ onUploadComplete }) => {
             setMessage('Fetching new Strava activities...');
 
             // Determine sync period from user settings
-            const syncMode = await db.getSettings('sync_mode') || 'now';
+            const syncMode = normalizeSyncMode(await db.getSettings('sync_mode') || 'incremental');
             let afterEpoch;
             let beforeEpoch;
 
@@ -126,7 +128,7 @@ const FileDropzone = ({ onUploadComplete }) => {
                 if (syncFrom) {
                     afterEpoch = Math.floor(new Date(syncFrom).getTime() / 1000);
                 } else {
-                    afterEpoch = Math.floor(Date.now() / 1000);
+                    afterEpoch = getDefaultBackfillEpochSeconds();
                 }
                 if (syncTo) {
                     // End of the selected day
@@ -139,12 +141,12 @@ const FileDropzone = ({ onUploadComplete }) => {
                 if (syncFrom) {
                     afterEpoch = Math.floor(new Date(syncFrom).getTime() / 1000);
                 } else {
-                    afterEpoch = Math.floor(Date.now() / 1000);
+                    afterEpoch = getDefaultBackfillEpochSeconds();
                 }
             } else {
-                // 'now' mode: only sync from last sync time onward
+                // Incremental mode: sync from last sync time, or backfill last 6 months initially.
                 let lastSync = await db.getSettings('strava_last_sync');
-                if (!lastSync) lastSync = Math.floor(Date.now() / 1000);
+                if (!lastSync) lastSync = getDefaultBackfillEpochSeconds();
                 afterEpoch = lastSync;
             }
 
@@ -244,12 +246,14 @@ const FileDropzone = ({ onUploadComplete }) => {
 
                 await db.addWorkout(workout);
                 newCount++;
+
+                existingWorkouts.push(workout);
                 console.log(`Successfully imported: ${activity.name}`);
             }
 
             await db.saveSettings('strava_last_sync', Math.floor(Date.now() / 1000));
             setStatus('success');
-            setMessage(`Successfully synced ${newCount} new activities!`);
+            setMessage(`Successfully synced ${newCount} new activities.`);
             console.log(`Strava sync complete: ${newCount} new activities`);
             if (onUploadComplete && newCount > 0) onUploadComplete();
 

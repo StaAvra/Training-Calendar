@@ -172,7 +172,7 @@ export const fetchStravaStreams = async (activityId) => {
     const keys = 'time,watts,heartrate,cadence,distance,velocity_smooth,altitude,grade_smooth';
 
     try {
-        const url = `${STRAVA_API_BASE}/activities/${activityId}/streams?keys=${keys}&key_by_type=true`;
+        const url = `${STRAVA_API_BASE}/activities/${activityId}/streams?keys=${keys}`;
         console.log(`Fetching streams for activity ${activityId}`);
         
         const res = await fetch(url, {

@@ -4,6 +4,18 @@ const axios = require('axios');
 const cors = require('cors');
 const { GarminConnect } = require('garmin-connect');
 
+// This machine's network (corporate proxy / antivirus TLS inspection) intercepts outbound
+// HTTPS with a locally-issued certificate that Node doesn't trust, causing both Strava and
+// Garmin requests to fail with "self-signed certificate in certificate chain". Disabling
+// certificate verification here is a real security trade-off (susceptible to MITM), but is
+// required for outbound requests to succeed on such networks. Set DISABLE_TLS_VERIFICATION=false
+// in backend/.env to turn this off once your network/CA trust is resolved another way
+// (e.g. NODE_EXTRA_CA_CERTS pointing at your proxy's root certificate).
+if (process.env.DISABLE_TLS_VERIFICATION !== 'false') {
+    axios.defaults.httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
+    console.warn('[security] TLS certificate verification is DISABLED for outbound HTTPS requests. Set DISABLE_TLS_VERIFICATION=false in backend/.env once this workaround is no longer needed.');
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -240,6 +252,36 @@ const parseGarminTcxStreams = (tcxXml) => {
     return streams;
 };
 
+const normalizeGarminDateToIso = (value) => {
+    if (!value) return null;
+
+    // Handle common Garmin formats:
+    // - "YYYY-MM-DD HH:mm:ss"
+    // - ISO strings with/without timezone
+    const raw = String(value).trim();
+    if (!raw) return null;
+
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+    const normalized = raw.includes(' ') ? raw.replace(' ', 'T') : raw;
+
+    const candidates = hasTimezone
+        ? [normalized]
+        : [
+            `${normalized}Z`,
+            normalized,
+            raw,
+        ];
+
+    for (const candidate of candidates) {
+        const d = new Date(candidate);
+        if (!Number.isNaN(d.getTime())) {
+            return d.toISOString();
+        }
+    }
+
+    return null;
+};
+
 // 6. Garmin Login
 app.post('/api/garmin/login', async (req, res) => {
     const { username, password } = req.body;
@@ -355,12 +397,8 @@ app.get('/api/garmin/activities', async (req, res) => {
 
         // Map to a normalized shape with all relevant fields
         const mapped = cyclingActivities.map(a => {
-            // Garmin returns startTimeGMT as "YYYY-MM-DD HH:MM:SS" (no timezone marker).
-            // Appending 'Z' forces correct UTC parsing so dedup comparisons work
-            // regardless of the user's local timezone.
-            const startTimeUtc = a.startTimeGMT
-                ? new Date(a.startTimeGMT.replace(' ', 'T') + 'Z').toISOString()
-                : (a.startTimeLocal ? new Date(a.startTimeLocal).toISOString() : null);
+            const startTimeUtc = normalizeGarminDateToIso(a.startTimeGMT)
+                || normalizeGarminDateToIso(a.startTimeLocal);
 
             return {
             garmin_id: a.activityId,

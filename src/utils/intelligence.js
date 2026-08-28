@@ -6,11 +6,24 @@ import { trainResponderModel, describeResponderProfile } from './intelligence/ml
  * Looks for blocks where performance Metrics (CP/FTP) improved significantly.
  */
 export const analyzeAdaptations = (workouts, metrics, ftpHistory) => {
-    if (!workouts || workouts.length < 20) return { insufficientData: true };
+    const now = new Date();
+    const completedWorkouts = (workouts || []).filter((workout) => {
+        const workoutDate = new Date(workout.date);
+        if (Number.isNaN(workoutDate.getTime()) || workoutDate > now) return false;
+
+        const isStillPlanned = (workout.planned === true || workout.completion_status === 'planned')
+            && workout.completed !== true
+            && workout.completion_status !== 'completed';
+
+        if (isStillPlanned) return false;
+        return Number(workout.total_elapsed_time || 0) > 0;
+    });
+
+    if (completedWorkouts.length < 20) return { insufficientData: true };
 
     // 1. Create a Time Series of Weekly Stats (TSS, Volume, Intensity Distribution) vs Performance
     const weeklyStats = [];
-    const sortedWorkouts = [...workouts].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const sortedWorkouts = [...completedWorkouts].sort((a, b) => new Date(a.date) - new Date(b.date));
 
     if (!sortedWorkouts.length) return { insufficientData: true };
 
@@ -37,10 +50,10 @@ export const analyzeAdaptations = (workouts, metrics, ftpHistory) => {
     });
 
     // Iterate week by week
-    let currentWeekStart = startOfWeek(firstDate);
+    let currentWeekStart = startOfWeek(firstDate, { weekStartsOn: 1 });
 
     while (currentWeekStart <= lastDate) {
-        const currentWeekEnd = endOfWeek(currentWeekStart);
+        const currentWeekEnd = endOfWeek(currentWeekStart, { weekStartsOn: 1 });
 
         // Filter workouts for this week
         const weeksWorkouts = enrichedWorkouts.filter(w => {
@@ -181,6 +194,187 @@ export const analyzeResponderProfile = (analysis, profile) => {
     };
 };
 
+const TRAINING_APPROACHES = {
+    conservative: {
+        key: 'conservative',
+        label: 'Conservative',
+        volumeRamp: 0.02,
+        secondBlockBoost: 0.01,
+        recoveryMultiplier: 0.78,
+        powerStep: 2,
+        powerBiasPct: -0.015,
+        weeklyPowerRampPct: 0.002,
+        progressionCycle: 4,
+    },
+    moderate: {
+        key: 'moderate',
+        label: 'Moderate',
+        volumeRamp: 0.04,
+        secondBlockBoost: 0.015,
+        recoveryMultiplier: 0.76,
+        powerStep: 4,
+        powerBiasPct: -0.005,
+        weeklyPowerRampPct: 0.004,
+        progressionCycle: 3,
+    },
+    balanced: {
+        key: 'balanced',
+        label: 'Balanced',
+        volumeRamp: 0.06,
+        secondBlockBoost: 0.02,
+        recoveryMultiplier: 0.75,
+        powerStep: 6,
+        powerBiasPct: 0,
+        weeklyPowerRampPct: 0.006,
+        progressionCycle: 3,
+    },
+    aggressive: {
+        key: 'aggressive',
+        label: 'Aggressive',
+        volumeRamp: 0.09,
+        secondBlockBoost: 0.03,
+        recoveryMultiplier: 0.74,
+        powerStep: 9,
+        powerBiasPct: 0.02,
+        weeklyPowerRampPct: 0.01,
+        progressionCycle: 2,
+    },
+    very_aggressive: {
+        key: 'very_aggressive',
+        label: 'Very Aggressive',
+        volumeRamp: 0.12,
+        secondBlockBoost: 0.04,
+        recoveryMultiplier: 0.72,
+        powerStep: 12,
+        powerBiasPct: 0.04,
+        weeklyPowerRampPct: 0.014,
+        progressionCycle: 2,
+    },
+};
+
+const normalizeApproachKey = (approach) => {
+    const normalized = String(approach || '').trim().toLowerCase().replace(/\s+/g, '_');
+    if (normalized === 'veryaggressive') return 'very_aggressive';
+    return normalized;
+};
+
+const getApproachRank = (approach) => {
+    const key = normalizeApproachKey(approach);
+    const ranks = {
+        conservative: 0,
+        moderate: 1,
+        balanced: 2,
+        aggressive: 3,
+        very_aggressive: 4,
+    };
+    return Number.isFinite(ranks[key]) ? ranks[key] : ranks.balanced;
+};
+
+const getApproachFitConfidence = (selectedKey, suggested) => {
+    const base = Number(suggested?.confidence || 50);
+    const distance = Math.abs(getApproachRank(selectedKey) - getApproachRank(suggested?.key || 'balanced'));
+    if (distance === 0) return Math.max(25, Math.min(99, Math.round(base)));
+
+    const penalties = [0, 18, 36, 52, 66];
+    const penalty = penalties[Math.min(distance, penalties.length - 1)];
+    return Math.max(8, Math.min(99, Math.round(base - penalty)));
+};
+
+const getApproachConfig = (approach) => {
+    const key = normalizeApproachKey(approach);
+    return TRAINING_APPROACHES[key] || TRAINING_APPROACHES.balanced;
+};
+
+const getCompletedRecentWorkouts = (workouts = [], lookbackDays = 56) => {
+    const nowTs = Date.now();
+    const cutoffTs = nowTs - (lookbackDays * 24 * 60 * 60 * 1000);
+    return workouts.filter((workout) => {
+        const ts = new Date(workout?.date || workout?.start_time).getTime();
+        return Number.isFinite(ts)
+            && ts >= cutoffTs
+            && ts <= nowTs
+            && getWorkoutCompletionStatus(workout) === 'completed';
+    });
+};
+
+const inferWorkoutIntervalZone = (workout, effectiveRef = 250) => {
+    if (!workout) return null;
+
+    const explicit = String(workout.planned_interval_zone || '').trim().toLowerCase();
+    if (explicit) return explicit;
+
+    const title = String(workout.title || workout.name || '').toLowerCase();
+    if (title.includes('vo2')) return 'vo2max';
+    if (title.includes('threshold')) return 'threshold';
+    if (title.includes('tempo')) return 'tempo';
+    if (title.includes('anaerobic') || title.includes('sprint')) return 'anaerobic';
+
+    const hasStructured = Number(workout.structured_reps || 0) > 0
+        && Number(workout.structured_interval_mins || 0) > 0;
+    if (!hasStructured) return null;
+
+    const low = Number(workout.structured_power_low || workout.structured_target_avg || workout.normalized_power || workout.avg_power || 0);
+    const ratio = effectiveRef > 0 ? (low / effectiveRef) : 0;
+
+    if (ratio >= 1.18) return 'anaerobic';
+    if (ratio >= 1.05) return 'vo2max';
+    if (ratio >= 0.9) return 'threshold';
+    if (ratio >= 0.75) return 'tempo';
+    return null;
+};
+
+export const suggestTrainingApproach = (analysis, responderProfile = null, workouts = [], availabilityHours = 6) => {
+    const safeResponder = responderProfile || analyzeResponderProfile(analysis || { adaptations: [], workouts: [] }, {});
+    const recent = getCompletedRecentWorkouts(workouts, 42);
+
+    const successScores = recent
+        .map((w) => Number(w?.success_score))
+        .filter((score) => Number.isFinite(score) && score > 0);
+    const avgSuccessScore = successScores.length
+        ? (successScores.reduce((acc, score) => acc + score, 0) / successScores.length)
+        : 78;
+
+    const recentFeeling = recent
+        .map((w) => Number(w?.feeling_strength))
+        .filter((value) => Number.isFinite(value) && value > 0);
+    const avgFeeling = recentFeeling.length
+        ? (recentFeeling.reduce((acc, value) => acc + value, 0) / recentFeeling.length)
+        : 6;
+
+    const stagnationPenalty = analysis?.stagnationZones?.length ? Math.min(15, analysis.stagnationZones.length * 4) : 0;
+    const volumeScore = Number(safeResponder?.volumeResponderScore || 0);
+    const intensityScore = Number(safeResponder?.intensityResponderScore || 0);
+    const confidence = Number(safeResponder?.confidence || 0);
+
+    let aggressivenessScore = 50;
+    aggressivenessScore += Math.min(15, (availabilityHours - 6) * 2);
+    aggressivenessScore += Math.min(20, (avgSuccessScore - 75) * 0.6);
+    aggressivenessScore += Math.min(10, (avgFeeling - 6) * 2);
+    aggressivenessScore += Math.min(12, (intensityScore - volumeScore) * 0.2);
+    aggressivenessScore -= stagnationPenalty;
+
+    let key = 'balanced';
+    if (aggressivenessScore < 38) key = 'conservative';
+    else if (aggressivenessScore < 48) key = 'moderate';
+    else if (aggressivenessScore < 63) key = 'balanced';
+    else if (aggressivenessScore < 74) key = 'aggressive';
+    else key = 'very_aggressive';
+
+    const rationaleParts = [];
+    if (intensityScore > volumeScore + 8) rationaleParts.push('Recent response profile favors intensity development.');
+    if (volumeScore > intensityScore + 8) rationaleParts.push('Recent response profile favors durability and steady volume.');
+    if (avgSuccessScore >= 88) rationaleParts.push('Execution quality has been strong, allowing faster progression.');
+    if (avgFeeling <= 5.5) rationaleParts.push('Recent recovery markers suggest caution with progression speed.');
+    if (analysis?.stagnationZones?.length) rationaleParts.push('Past stagnation under high load tempers aggressiveness.');
+
+    return {
+        key,
+        label: getApproachConfig(key).label,
+        confidence: Math.max(35, Math.min(95, Math.round((confidence * 0.55) + (Math.abs(aggressivenessScore - 50) * 0.8)))),
+        rationale: rationaleParts.join(' ') || 'Balanced progression is recommended from current history trends.',
+    };
+};
+
 /**
  * Generates goal-specific zone modifiers based on training goal.
  * Returns base percentages for each zone type.
@@ -286,174 +480,670 @@ const blendHistoryWithGoal = (analysis, goal, avgSuccessVol, responderProfile = 
     return blended;
 };
 
+// --- Interval Prescription Engine ---
+
+/**
+ * Progression levels for structured intervals above endurance zone.
+ * Each level is harder (longer interval or more reps) than the previous.
+ */
+const INTERVAL_PROGRESSIONS = {
+    tempo: [
+        { reps: 4, intervalMins: 8,    restMins: 4, pctLow: 0.76, pctHigh: 0.90 }, // L0 – baseline
+        { reps: 4, intervalMins: 10,   restMins: 4, pctLow: 0.76, pctHigh: 0.88 }, // L1
+        { reps: 4, intervalMins: 12,   restMins: 3, pctLow: 0.76, pctHigh: 0.88 }, // L2
+        { reps: 5, intervalMins: 10,   restMins: 3, pctLow: 0.77, pctHigh: 0.89 }, // L3
+        { reps: 3, intervalMins: 15,   restMins: 4, pctLow: 0.78, pctHigh: 0.90 }, // L4
+        { reps: 3, intervalMins: 20,   restMins: 5, pctLow: 0.80, pctHigh: 0.90 }, // L5
+    ],
+    threshold: [
+        { reps: 4, intervalMins: 4,  restMins: 4, pctLow: 0.95, pctHigh: 1.05 }, // L0 – baseline
+        { reps: 4, intervalMins: 5,  restMins: 4, pctLow: 0.95, pctHigh: 1.05 }, // L1
+        { reps: 4, intervalMins: 6,  restMins: 4, pctLow: 0.95, pctHigh: 1.05 }, // L2
+        { reps: 3, intervalMins: 8,  restMins: 4, pctLow: 0.95, pctHigh: 1.05 }, // L3
+        { reps: 2, intervalMins: 12, restMins: 6, pctLow: 0.95, pctHigh: 1.05 }, // L4
+        { reps: 2, intervalMins: 15, restMins: 6, pctLow: 0.95, pctHigh: 1.05 }, // L5
+    ],
+    vo2max: [
+        { reps: 4, intervalMins: 2, restMins: 4, pctLow: 1.08, pctHigh: 1.20 }, // L0 – baseline
+        { reps: 5, intervalMins: 2, restMins: 4, pctLow: 1.08, pctHigh: 1.20 }, // L1
+        { reps: 6, intervalMins: 2, restMins: 4, pctLow: 1.08, pctHigh: 1.20 }, // L2
+        { reps: 4, intervalMins: 3, restMins: 4, pctLow: 1.08, pctHigh: 1.18 }, // L3
+        { reps: 5, intervalMins: 3, restMins: 4, pctLow: 1.08, pctHigh: 1.18 }, // L4
+        { reps: 4, intervalMins: 4, restMins: 4, pctLow: 1.06, pctHigh: 1.16 }, // L5
+    ],
+    anaerobic: [
+        { reps: 6, intervalMins: 0.5,  restMins: 2, pctLow: 1.30, pctHigh: 1.50 }, // L0
+        { reps: 8, intervalMins: 0.5,  restMins: 2, pctLow: 1.30, pctHigh: 1.50 }, // L1
+        { reps: 6, intervalMins: 0.75, restMins: 2, pctLow: 1.25, pctHigh: 1.45 }, // L2
+        { reps: 8, intervalMins: 0.75, restMins: 2, pctLow: 1.25, pctHigh: 1.45 }, // L3
+        { reps: 6, intervalMins: 1,    restMins: 3, pctLow: 1.20, pctHigh: 1.40 }, // L4
+    ],
+};
+
+const isExecutionSuccess = (workout) => {
+    if (!workout) return false;
+    if (workout.execution_success === true) return true;
+    if (typeof workout.success_score === 'number') return workout.success_score >= 80;
+
+    const completed = workout.completed === true || workout.completion_status === 'completed';
+    const rpe = Number(workout.rpe || 0);
+    const feeling = Number(workout.feeling_strength || 0);
+    const plannedTarget = Number(workout.structured_target_avg || 0);
+    const achievedPower = Number(workout.normalized_power || workout.avg_power || 0);
+    const hasObjectiveTargetHit = plannedTarget > 0 && achievedPower >= plannedTarget * 0.92;
+    const subjectivePass = (feeling >= 7) || (rpe > 0 && rpe <= 8 && feeling >= 6);
+
+    return completed && (hasObjectiveTargetHit || subjectivePass);
+};
+
+const getTargetLowFromHistory = (workouts, zone, baseLow, effectiveRef = 250) => {
+    if (!Array.isArray(workouts) || workouts.length === 0) return baseLow;
+
+    const recentStructured = workouts
+        .filter(w =>
+            inferWorkoutIntervalZone(w, effectiveRef) === zone &&
+            typeof w?.structured_power_low === 'number' &&
+            (w?.completed === true || w?.completion_status === 'completed')
+        )
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    if (!recentStructured.length) return baseLow;
+
+    const last = recentStructured[0];
+    const lastLow = Number(last.structured_power_low) || baseLow;
+
+    // Keep this as a conservative anchor; progression logic decides when to add watts.
+    return Math.max(baseLow, lastLow);
+};
+
+const getWorkoutCompletionStatus = (workout) => {
+    if (!workout) return 'completed';
+    if (workout.completion_status) return workout.completion_status;
+    if (workout.completed === true) return 'completed';
+    if (workout.planned === true || workout.plan_source === 'four_week') return 'planned';
+    return 'completed';
+};
+
+const calculateRecentAverageVolume = (workouts, lookbackDays = 28) => {
+    if (!Array.isArray(workouts) || workouts.length === 0) return 0;
+
+    const nowTs = Date.now();
+    const cutoffTs = nowTs - (lookbackDays * 24 * 60 * 60 * 1000);
+    const qualifying = workouts.filter(w => {
+        const ts = new Date(w.date || w.start_time).getTime();
+        if (!Number.isFinite(ts) || ts < cutoffTs || ts > nowTs) return false;
+        return getWorkoutCompletionStatus(w) === 'completed';
+    });
+
+    const totalHours = qualifying.reduce((acc, w) => acc + ((w.total_elapsed_time || 0) / 3600), 0);
+    const weeks = lookbackDays / 7;
+    return weeks > 0 ? (totalHours / weeks) : 0;
+};
+
+const getIntervalBlockMins = (reps, intervalMins, restMins) => {
+    if (reps <= 0 || intervalMins <= 0) return 0;
+    const rests = Math.max(0, reps - 1);
+    return (reps * intervalMins) + (rests * Math.max(0, restMins));
+};
+
+const getReservedWarmupCooldownMins = (sessionMins) => {
+    if (sessionMins <= 45) return 10;
+    if (sessionMins <= 75) return 12;
+    if (sessionMins <= 105) return 15;
+    return 20;
+};
+
+const SESSION_TYPE_LABELS = {
+    tempo: 'Tempo',
+    threshold: 'Threshold',
+    vo2max: 'VO2 Max',
+    anaerobic: 'Anaerobic'
+};
+
+const STRUCTURED_HISTORY_LOOKBACK_DAYS = 42;
+const TARGET_BAND_WATTS = 10;
+
+const buildPowerBand = (low) => {
+    const powerLow = Math.max(1, Math.round(low));
+    return {
+        powerLow,
+        powerHigh: powerLow + TARGET_BAND_WATTS,
+    };
+};
+
+const getCycleWeek = (weekNumber = 1) => ((Math.max(1, Number(weekNumber)) - 1) % 4) + 1;
+
+const getZonePowerStep = (zone, approachConfig, cycleWeek) => {
+    const baseStep = Number(approachConfig?.powerStep || 3);
+    if (cycleWeek === 4) return -Math.max(2, Math.round(baseStep * 1.5));
+    if (cycleWeek === 3) {
+        if (zone === 'vo2max' || zone === 'anaerobic') return Math.max(3, baseStep + 1);
+        return baseStep + 1;
+    }
+    if (cycleWeek === 2) {
+        if (zone === 'tempo') return Math.max(1, baseStep - 1);
+        return baseStep;
+    }
+    return 0;
+};
+
+const getZonePowerFactor = (zone) => {
+    const factors = {
+        tempo: 0.6,
+        threshold: 0.85,
+        vo2max: 1.0,
+        anaerobic: 1.1,
+    };
+    return factors[zone] || 1.0;
+};
+
+const clampTargetForZone = (targetLow, zone, effectiveRef) => {
+    const bounds = {
+        tempo: [0.74, 0.93],
+        threshold: [0.9, 1.08],
+        vo2max: [1.03, 1.24],
+        anaerobic: [1.16, 1.58],
+    };
+    const [lowPct, highPct] = bounds[zone] || [0.6, 1.6];
+    const minW = Math.round(effectiveRef * lowPct);
+    const maxW = Math.round(effectiveRef * highPct);
+    return Math.max(minW, Math.min(maxW, Math.round(targetLow)));
+};
+
+const adjustIntervalDetailsForWeek = (details, zone, weekNumber, effectiveRef, approachConfig = TRAINING_APPROACHES.balanced) => {
+    if (!details) return details;
+
+    const cycleWeek = getCycleWeek(weekNumber);
+    const progressionAllowed = details.canProgress !== false;
+    if (!progressionAllowed && cycleWeek !== 4) {
+        return details;
+    }
+    const adjusted = { ...details };
+    const powerStep = getZonePowerStep(zone, approachConfig, cycleWeek);
+    const zoneFactor = getZonePowerFactor(zone);
+    const biasWatts = Math.round((effectiveRef || 250) * Number(approachConfig?.powerBiasPct || 0) * zoneFactor);
+    const weekRampDirection = cycleWeek === 4 ? -1 : Math.max(0, cycleWeek - 1);
+    const weekRampWatts = Math.round((effectiveRef || 250) * Number(approachConfig?.weeklyPowerRampPct || 0) * weekRampDirection * zoneFactor);
+    let targetLow = Number(adjusted.powerLow || 0) + powerStep + biasWatts + weekRampWatts;
+
+    if (cycleWeek === 2) {
+        if (zone === 'tempo' || zone === 'threshold') {
+            adjusted.intervalMins = Number((Number(adjusted.intervalMins || 0) + 0.5).toFixed(1));
+        } else {
+            adjusted.reps = Math.max(2, Number(adjusted.reps || 0) + 1);
+        }
+    }
+
+    if (cycleWeek === 3) {
+        if (zone === 'tempo' || zone === 'threshold') {
+            adjusted.intervalMins = Number((Number(adjusted.intervalMins || 0) + 1).toFixed(1));
+            adjusted.reps = Math.max(2, Number(adjusted.reps || 0) + 1);
+        } else {
+            adjusted.intervalMins = Number((Number(adjusted.intervalMins || 0) + 0.5).toFixed(1));
+            adjusted.reps = Math.max(2, Number(adjusted.reps || 0) + 1);
+        }
+    }
+
+    if (cycleWeek === 4) {
+        adjusted.reps = Math.max(2, Number(adjusted.reps || 0) - 1);
+        adjusted.intervalMins = Math.max(1, Number((Number(adjusted.intervalMins || 0) - 0.5).toFixed(1)));
+    }
+
+    if (targetLow <= 0) {
+        targetLow = Number(adjusted.powerLow || 0);
+    }
+    const clampedLow = clampTargetForZone(targetLow, zone, effectiveRef || 250);
+    const { powerLow, powerHigh } = buildPowerBand(clampedLow);
+    adjusted.powerLow = powerLow;
+    adjusted.powerHigh = powerHigh;
+    adjusted.pctLow = effectiveRef > 0 ? powerLow / effectiveRef : Number(adjusted.pctLow || 0);
+    adjusted.pctHigh = effectiveRef > 0 ? powerHigh / effectiveRef : Number(adjusted.pctHigh || 0);
+
+    const dur = Number(adjusted.intervalMins || 0);
+    const durLabel = dur < 1 ? `${Math.round(dur * 60)}s` : `${Number.isInteger(dur) ? dur : dur.toFixed(1)}min`;
+    adjusted.label = `${adjusted.reps}×${durLabel} @ ${powerLow}-${powerHigh}W (${Math.round(adjusted.pctLow * 100)}-${Math.round(adjusted.pctHigh * 100)}% ref)`;
+    adjusted.restLabel = `${adjusted.restMins}min easy recovery between intervals`;
+
+    return adjusted;
+};
+
+const getZoneProgressSignal = (workouts = [], zone, baseLow, effectiveRef = 250) => {
+    const nowTs = Date.now();
+    const cutoffTs = nowTs - (STRUCTURED_HISTORY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+    const recent = workouts
+        .filter(w => {
+            const ts = new Date(w?.date || w?.start_time).getTime();
+            return Number.isFinite(ts)
+                && ts >= cutoffTs
+                && ts <= nowTs
+                && inferWorkoutIntervalZone(w, effectiveRef) === zone
+                && typeof w?.structured_power_low === 'number'
+                && getWorkoutCompletionStatus(w) === 'completed';
+        })
+        .sort((a, b) => new Date(b.date || b.start_time) - new Date(a.date || a.start_time));
+
+    if (!recent.length) {
+        return {
+            anchorLow: baseLow,
+            lastLow: baseLow,
+            lastSuccess: false,
+            successRate: 0,
+            successStreak: 0,
+            sampleSize: 0,
+        };
+    }
+
+    const last = recent[0];
+    const lastLow = Number(last.structured_power_low) || baseLow;
+    const bestRecentLow = recent.reduce((acc, workout) => {
+        const low = Number(workout.structured_power_low || 0);
+        return low > acc ? low : acc;
+    }, baseLow);
+    const successfulCount = recent.filter(isExecutionSuccess).length;
+    let successStreak = 0;
+    for (const workout of recent) {
+        if (!isExecutionSuccess(workout)) break;
+        successStreak += 1;
+    }
+
+    return {
+        anchorLow: Math.max(baseLow, lastLow, bestRecentLow),
+        lastLow,
+        bestRecentLow,
+        lastSuccess: isExecutionSuccess(last),
+        successRate: recent.length ? (successfulCount / recent.length) : 0,
+        successStreak,
+        sampleSize: recent.length,
+    };
+};
+
+const getClosestProgressionLevel = (zone, anchor) => {
+    const progressions = INTERVAL_PROGRESSIONS[zone] || [];
+    if (!anchor || !progressions.length) return 0;
+
+    let bestLevel = 0;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    progressions.forEach((step, index) => {
+        const score = Math.abs((step.intervalMins || 0) - (anchor.intervalMins || 0)) * 3
+            + Math.abs((step.reps || 0) - (anchor.reps || 0)) * 2
+            + Math.abs((step.restMins || 0) - (anchor.restMins || 0));
+        if (score < bestScore) {
+            bestScore = score;
+            bestLevel = index;
+        }
+    });
+
+    return bestLevel;
+};
+
+const getStructuredBlockMinsFromWorkout = (workout) => {
+    const reps = Number(workout?.structured_reps || 0);
+    const intervalMins = Number(workout?.structured_interval_mins || 0);
+    const restMins = Number(workout?.structured_rest_mins || 0);
+    return getIntervalBlockMins(reps, intervalMins, restMins);
+};
+
+const analyzeStructuredSessionHistory = (workouts = [], effectiveRef = 250) => {
+    const zones = ['tempo', 'threshold', 'vo2max', 'anaerobic'];
+    const nowTs = Date.now();
+    const cutoffTs = nowTs - (STRUCTURED_HISTORY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+
+    return Object.fromEntries(zones.map(zone => {
+        const matching = workouts
+            .filter(w => {
+                const ts = new Date(w.date || w.start_time).getTime();
+                return Number.isFinite(ts)
+                    && ts >= cutoffTs
+                    && ts <= nowTs
+                    && getWorkoutCompletionStatus(w) === 'completed'
+                    && inferWorkoutIntervalZone(w, effectiveRef) === zone
+                    && Number(w.structured_reps || 0) > 0
+                    && Number(w.structured_interval_mins || 0) > 0;
+            })
+            .map(w => {
+                const blockMins = getStructuredBlockMinsFromWorkout(w);
+                const powerLow = Number(w.structured_power_low) || Math.round(effectiveRef * 0.9);
+                const powerHigh = Number(w.structured_power_high) || (powerLow + TARGET_BAND_WATTS);
+                const ts = new Date(w.date || w.start_time).getTime();
+                const recencyDays = Math.max(0, (nowTs - ts) / (24 * 60 * 60 * 1000));
+                const successBoost = w.execution_success === true ? 40 : 0;
+                const objectiveBoost = isExecutionSuccess(w) ? 25 : 0;
+                const scoreBoost = Number(w.success_score || 0);
+                const recencyBoost = Math.max(0, 30 - recencyDays);
+                return {
+                    workout: w,
+                    reps: Number(w.structured_reps),
+                    intervalMins: Number(w.structured_interval_mins),
+                    restMins: Number(w.structured_rest_mins || 0),
+                    powerLow,
+                    powerHigh,
+                    blockMins,
+                    score: successBoost + objectiveBoost + scoreBoost + blockMins + recencyBoost + (powerLow / 8),
+                    sessionHours: Math.max((Number(w.total_elapsed_time || 0) / 3600), (blockMins + getReservedWarmupCooldownMins(blockMins)) / 60),
+                };
+            })
+            .sort((a, b) => b.score - a.score || new Date(b.workout.date) - new Date(a.workout.date));
+
+        if (!matching.length) return [zone, null];
+
+        const anchor = matching[0];
+        return [zone, {
+            zone,
+            anchor,
+            startingLevel: getClosestProgressionLevel(zone, anchor),
+            minSessionHours: Math.max(anchor.sessionHours, (anchor.blockMins + getReservedWarmupCooldownMins(anchor.blockMins)) / 60),
+            frequency: matching.length / (STRUCTURED_HISTORY_LOOKBACK_DAYS / 7),
+            label: `${anchor.reps}×${anchor.intervalMins}min`,
+            lastDate: anchor.workout.date,
+        }];
+    }));
+};
+
+const getIntensitySessionLimit = (availabilityHours, daysAvailable) => {
+    if (daysAvailable <= 3 || availabilityHours < 4.5) return 1;
+    if (daysAvailable <= 5 || availabilityHours < 7.5) return 2;
+    return 3;
+};
+
+const rankIntensityZones = (zoneDistribution, structuredHistory = {}) => {
+    return ['tempo', 'threshold', 'vo2max', 'anaerobic']
+        .map(zone => {
+            const history = structuredHistory[zone];
+            const distributionScore = (zoneDistribution?.[zone] || 0) * 100;
+            const historyScore = history ? 30 + Math.min(20, history.anchor.blockMins / 2) + Math.min(15, history.frequency * 8) : 0;
+            return { zone, score: distributionScore + historyScore, history };
+        })
+        .filter(entry => entry.score > 0)
+        .sort((a, b) => b.score - a.score);
+};
+
+const buildProgressedStructuredPrescription = (zone, exposureIndex, structuredHistory, effectiveRef, workouts = [], approachConfig = TRAINING_APPROACHES.balanced) => {
+    const history = structuredHistory?.[zone];
+    if (!history?.anchor) {
+        return buildIntervalPrescription(zone, 0, 1, effectiveRef, workouts);
+    }
+
+    const base = history.anchor;
+    let reps = base.reps;
+    let intervalMins = base.intervalMins;
+    const restMins = base.restMins;
+    const signal = getZoneProgressSignal(workouts, zone, base.powerLow, effectiveRef);
+    let powerLow = signal.anchorLow;
+    let canProgress = true;
+
+    if (exposureIndex > 0) {
+        const readinessStrong = signal.lastSuccess && signal.successRate >= 0.55;
+        const hasStrongCapability = (signal.bestRecentLow - base.powerLow) >= 6;
+        canProgress = readinessStrong || hasStrongCapability;
+        if (canProgress) {
+            const shouldIncreasePower = hasStrongCapability
+                || (signal.successStreak >= 2 && (exposureIndex % Math.max(2, approachConfig.progressionCycle || 3) === 0));
+            if (shouldIncreasePower) {
+                powerLow += approachConfig.powerStep || 3;
+            } else if (zone === 'tempo' || zone === 'threshold') {
+                intervalMins += 1;
+                if (exposureIndex % 2 === 0) reps += 1;
+            } else {
+                intervalMins = Number((intervalMins + 0.5).toFixed(1));
+                if (exposureIndex % 2 === 0) reps += 1;
+            }
+        } else if (!signal.lastSuccess && exposureIndex >= 2) {
+            reps = Math.max(2, reps - 1);
+        }
+    }
+
+    const { powerLow: bandLow, powerHigh } = buildPowerBand(powerLow);
+    const durLabel = intervalMins < 1 ? `${Math.round(intervalMins * 60)}s` : `${intervalMins}min`;
+
+    return {
+        reps,
+        intervalMins,
+        restMins,
+        powerLow: bandLow,
+        powerHigh,
+        pctLow: effectiveRef > 0 ? bandLow / effectiveRef : base.powerLow / Math.max(effectiveRef, 1),
+        pctHigh: effectiveRef > 0 ? powerHigh / effectiveRef : powerHigh / Math.max(effectiveRef, 1),
+        level: history.startingLevel,
+        label: `${reps}×${durLabel} @ ${bandLow}-${powerHigh}W (${Math.round((effectiveRef > 0 ? bandLow / effectiveRef : 0) * 100)}-${Math.round((effectiveRef > 0 ? powerHigh / effectiveRef : 0) * 100)}% ref)`,
+        restLabel: `${restMins}min easy recovery between intervals`,
+        source: 'history',
+        canProgress,
+    };
+};
+
+const createIntervalSessionCandidate = (zone, requestedHours, structuredHistory, effectiveRef, workouts = [], exposureIndex = 0, approachConfig = TRAINING_APPROACHES.balanced, weekNumber = 1) => {
+    const history = structuredHistory?.[zone];
+    const cycleWeek = getCycleWeek(weekNumber);
+    const details = history?.anchor
+        ? buildProgressedStructuredPrescription(zone, exposureIndex, structuredHistory, effectiveRef, workouts, approachConfig)
+        : buildIntervalPrescription(zone, history?.startingLevel || 0, cycleWeek, effectiveRef, workouts);
+    if (!details) return null;
+
+    const progressedDetails = adjustIntervalDetailsForWeek(details, zone, weekNumber, effectiveRef, approachConfig);
+
+    const workBlockMins = getIntervalBlockMins(progressedDetails.reps, progressedDetails.intervalMins, progressedDetails.restMins);
+    const minimumSessionHours = Math.max(requestedHours || 0, (workBlockMins + getReservedWarmupCooldownMins(workBlockMins)) / 60, history?.minSessionHours || 0);
+
+    return {
+        type: SESSION_TYPE_LABELS[zone] || zone,
+        count: 1,
+        hoursPerSession: minimumSessionHours,
+        totalWeekly: minimumSessionHours,
+        intervalZone: zone,
+        intervalStartingLevel: history?.startingLevel || 0,
+        intervalDetails: ensureIntervalCoverage(progressedDetails, minimumSessionHours),
+        priorityScore: (history ? 100 : 0) + workBlockMins,
+    };
+};
+
+    const fitIntensitySessionsToWeek = (selectedZones, availabilityHours, zoneDistribution, structuredHistory, effectiveRef, workouts, exposureCounts, includeRecovery = false, approachConfig = TRAINING_APPROACHES.balanced, weekNumber = 1) => {
+    const sessions = [];
+    const minEnduranceHours = availabilityHours >= 4 ? 1.25 : Math.min(1.0, availabilityHours * 0.4);
+    const recoveryHours = includeRecovery && availabilityHours >= 5 ? 0.5 : 0;
+    const requestedIntensityHours = selectedZones.map(({ zone }) => ({
+        zone,
+        hours: Math.max(availabilityHours * (zoneDistribution?.[zone] || 0), structuredHistory?.[zone]?.minSessionHours || 0)
+    }));
+
+    const intensitySessions = [];
+    requestedIntensityHours.forEach(({ zone, hours }) => {
+        const candidate = createIntervalSessionCandidate(zone, hours, structuredHistory, effectiveRef, workouts, exposureCounts[zone] || 0, approachConfig, weekNumber);
+        if (candidate) intensitySessions.push(candidate);
+    });
+
+    let totalIntensityHours = intensitySessions.reduce((acc, session) => acc + session.totalWeekly, 0);
+    let availableForEndurance = availabilityHours - recoveryHours - totalIntensityHours;
+
+    while (availableForEndurance < minEnduranceHours && intensitySessions.length > 1) {
+        intensitySessions.sort((a, b) => a.priorityScore - b.priorityScore);
+        intensitySessions.shift();
+        totalIntensityHours = intensitySessions.reduce((acc, session) => acc + session.totalWeekly, 0);
+        availableForEndurance = availabilityHours - recoveryHours - totalIntensityHours;
+    }
+
+    const enduranceHours = Math.max(minEnduranceHours, availabilityHours - recoveryHours - totalIntensityHours);
+    sessions.push({
+        type: 'Endurance',
+        count: enduranceHours >= 3 ? 2 : 1,
+        hoursPerSession: enduranceHours >= 3 ? enduranceHours / 2 : enduranceHours,
+        totalWeekly: enduranceHours,
+    });
+
+    intensitySessions.forEach(session => sessions.push(session));
+
+    if (recoveryHours > 0) {
+        sessions.push({
+            type: 'Recovery',
+            count: 1,
+            hoursPerSession: recoveryHours,
+            totalWeekly: recoveryHours,
+        });
+    }
+
+    return {
+        sessions,
+        totalWeeklyHours: sessions.reduce((acc, session) => acc + session.totalWeekly, 0),
+        sessionsPerWeek: sessions.reduce((acc, session) => acc + session.count, 0),
+    };
+};
+
+const ensureIntervalCoverage = (details, sessionHours) => {
+    if (!details) return details;
+
+    const sessionMins = Math.round((sessionHours || 0) * 60);
+    const reservedWarmupCooldownMins = getReservedWarmupCooldownMins(sessionMins);
+    const maxWorkBlockMins = Math.max(0, sessionMins - reservedWarmupCooldownMins);
+    if (maxWorkBlockMins <= 0) return details;
+
+    const currentBlock = getIntervalBlockMins(details.reps, details.intervalMins, details.restMins);
+    if (currentBlock <= maxWorkBlockMins) return details;
+
+    // Start from less intervals for short sessions, preserving interval quality first.
+    let fittedReps = details.reps;
+    while (fittedReps > 1) {
+        const candidate = getIntervalBlockMins(fittedReps, details.intervalMins, details.restMins);
+        if (candidate <= maxWorkBlockMins) break;
+        fittedReps -= 1;
+    }
+
+    // If still too long, progressively trim interval duration (0.5 min steps) and keep at least 1 rep.
+    let fittedIntervalMins = details.intervalMins;
+    if (getIntervalBlockMins(fittedReps, fittedIntervalMins, details.restMins) > maxWorkBlockMins) {
+        while (fittedIntervalMins > 1) {
+            const next = Math.max(1, Number((fittedIntervalMins - 0.5).toFixed(1)));
+            if (next === fittedIntervalMins) break;
+            fittedIntervalMins = next;
+            if (getIntervalBlockMins(fittedReps, fittedIntervalMins, details.restMins) <= maxWorkBlockMins) break;
+        }
+    }
+
+    const durLabel = fittedIntervalMins < 1
+        ? `${Math.round(fittedIntervalMins * 60)}s`
+        : `${Number.isInteger(fittedIntervalMins) ? fittedIntervalMins : fittedIntervalMins.toFixed(1)}min`;
+
+    return {
+        ...details,
+        reps: Math.max(1, fittedReps),
+        intervalMins: fittedIntervalMins,
+        label: `${Math.max(1, fittedReps)}×${durLabel} @ ${details.powerLow}-${details.powerHigh}W (${Math.round(details.pctLow * 100)}-${Math.round(details.pctHigh * 100)}% ref)`,
+        restLabel: `${details.restMins}min easy recovery between intervals`,
+    };
+};
+
+/**
+ * Scans the last 8 weeks of power curve data to determine the user's
+ * current interval capacity per zone. Returns a starting level (0–5).
+ */
+const analyzeRecentIntervalCapacity = (workouts, effectiveRef) => {
+    const empty = { tempoLevel: 0, thresholdLevel: 0, vo2Level: 0, anaLevel: 0 };
+    if (!workouts?.length || !effectiveRef) return empty;
+
+    const cutoff = new Date(Date.now() - 56 * 24 * 60 * 60 * 1000);
+    const recent = workouts.filter(w => new Date(w.date) >= cutoff);
+    if (!recent.length) return empty;
+
+    // Aggregate best power curve values across all recent workouts
+    const best = {};
+    recent.forEach(w => {
+        if (!w.power_curve) return;
+        Object.entries(w.power_curve).forEach(([key, val]) => {
+            if (val && (!best[key] || val > best[key])) best[key] = val;
+        });
+    });
+
+    // Tempo: longest duration sustaining >= 76% of reference power
+    const tempoKeys = ['duration_8m', 'duration_10m', 'duration_12m', 'duration_15m', 'duration_20m'];
+    let tempoLevel = 0;
+    tempoKeys.forEach((k, i) => { if ((best[k] || 0) >= effectiveRef * 0.76) tempoLevel = i + 1; });
+
+    // Threshold: longest duration sustaining >= 91% of reference power
+    const thresholdKeys = ['duration_3m', 'duration_5m', 'duration_8m', 'duration_10m', 'duration_12m', 'duration_15m'];
+    let thresholdLevel = 0;
+    thresholdKeys.forEach((k, i) => { if ((best[k] || 0) >= effectiveRef * 0.91) thresholdLevel = i + 1; });
+
+    // VO2 Max: longest duration sustaining >= 106% of reference power
+    const vo2Keys = ['duration_1m', 'duration_2m', 'duration_3m', 'duration_5m'];
+    let vo2Level = 0;
+    vo2Keys.forEach((k, i) => { if ((best[k] || 0) >= effectiveRef * 1.06) vo2Level = i + 1; });
+
+    // Anaerobic: 1-min power vs thresholds
+    let anaLevel = 0;
+    if ((best['duration_1m'] || 0) >= effectiveRef * 1.20) anaLevel = 2;
+    else if ((best['duration_1m'] || 0) >= effectiveRef * 1.10) anaLevel = 1;
+
+    return {
+        tempoLevel:     Math.min(tempoLevel,     5),
+        thresholdLevel: Math.min(thresholdLevel, 5),
+        vo2Level:       Math.min(vo2Level,       5),
+        anaLevel:       Math.min(anaLevel,       4),
+    };
+};
+
+/**
+ * Builds a concrete interval prescription for a given zone/level/week.
+ * Week 1: base | Week 2: +1 rep | Week 3: advance one level | Week 4: recover (drop level, -1 rep)
+ */
+const buildIntervalPrescription = (zone, startingLevel, weekNumber, effectiveRef, workouts = []) => {
+    const progressions = INTERVAL_PROGRESSIONS[zone];
+    if (!progressions || !effectiveRef) return null;
+
+    let level = startingLevel;
+    let repDelta = 0;
+    if (weekNumber === 2) { repDelta = 1; }
+    else if (weekNumber === 3) { level = Math.min(startingLevel + 1, progressions.length - 1); }
+    else if (weekNumber === 4) { level = Math.max(0, startingLevel - 1); repDelta = -1; }
+
+    const t = progressions[level];
+    const reps = Math.max(2, t.reps + repDelta);
+    const baseLow = Math.round(effectiveRef * t.pctLow);
+    const powerLow = getTargetLowFromHistory(workouts, zone, baseLow, effectiveRef);
+    const { powerLow: bandLow, powerHigh } = buildPowerBand(powerLow);
+    const durLabel  = t.intervalMins < 1 ? `${Math.round(t.intervalMins * 60)}s` : `${t.intervalMins}min`;
+
+    return {
+        reps,
+        intervalMins: t.intervalMins,
+        restMins: t.restMins,
+        powerLow: bandLow,
+        powerHigh,
+        pctLow: effectiveRef > 0 ? bandLow / effectiveRef : t.pctLow,
+        pctHigh: effectiveRef > 0 ? powerHigh / effectiveRef : t.pctHigh,
+        level,
+        label:     `${reps}×${durLabel} @ ${bandLow}-${powerHigh}W (${Math.round((effectiveRef > 0 ? bandLow / effectiveRef : t.pctLow) * 100)}-${Math.round((effectiveRef > 0 ? powerHigh / effectiveRef : t.pctHigh) * 100)}% ref)`,
+        restLabel: `${t.restMins}min easy recovery between intervals`,
+    };
+};
+
 /**
  * Converts zone percentages into a weekly session plan.
  * Considers availability and generates specific session breakdown.
  */
-const generateSessionPlan = (zoneDistribution, availabilityHours, avgSuccessVol, daysAvailable = 5) => {
-    // Determine intensity vs volume approach
-    const isTimeConstrained = availabilityHours < avgSuccessVol * 0.8;
+const generateSessionPlan = (zoneDistribution, availabilityHours, avgSuccessVol, daysAvailable = 5, intervalCapacity = null, effectiveRef = 250, workouts = [], structuredHistory = {}, approachConfig = TRAINING_APPROACHES.balanced) => {
+    const rankedZones = rankIntensityZones(zoneDistribution, structuredHistory);
+    const maxIntensityTypes = getIntensitySessionLimit(availabilityHours, daysAvailable);
+    const selectedZones = rankedZones.slice(0, maxIntensityTypes);
+    const exposureCounts = Object.fromEntries(rankedZones.map(({ zone }) => [zone, 0]));
 
-    let sessions = [];
-    let totalHours = 0;
-
-    // Recovery sessions (10-15% of time, usually 1x per week)
-    const recoveryHours = availabilityHours * (zoneDistribution.recovery || 0.12);
-    if (recoveryHours > 0.3) {
-        sessions.push({
-            type: 'Recovery',
-            count: Math.max(1, Math.round(recoveryHours / 0.75)),
-            hoursPerSession: recoveryHours / Math.max(1, Math.round(recoveryHours / 0.75)),
-            totalWeekly: recoveryHours
-        });
-        totalHours += recoveryHours;
-    }
-
-    // Endurance sessions (base aerobic work)
-    const enduranceHours = availabilityHours * (zoneDistribution.endurance || 0.50);
-    if (enduranceHours > 0.5) {
-        const enduranceCount = isTimeConstrained ? 1 : 2;
-        sessions.push({
-            type: 'Endurance',
-            count: enduranceCount,
-            hoursPerSession: enduranceHours / enduranceCount,
-            totalWeekly: enduranceHours
-        });
-        totalHours += enduranceHours;
-    }
-
-    // Tempo sessions (sustained sub-threshold)
-    const tempoHours = availabilityHours * (zoneDistribution.tempo || 0.18);
-    if (tempoHours > 0.4) {
-        sessions.push({
-            type: 'Tempo',
-            count: 1,
-            hoursPerSession: tempoHours,
-            totalWeekly: tempoHours
-        });
-        totalHours += tempoHours;
-    }
-
-    // Threshold sessions (sustained power)
-    const thresholdHours = availabilityHours * (zoneDistribution.threshold || 0.12);
-    if (thresholdHours > 0.4) {
-        sessions.push({
-            type: 'Threshold',
-            count: 1,
-            hoursPerSession: thresholdHours,
-            totalWeekly: thresholdHours
-        });
-        totalHours += thresholdHours;
-    }
-
-    // VO2 Max sessions (high intensity)
-    const vo2Hours = availabilityHours * (zoneDistribution.vo2max || 0.08);
-    if (vo2Hours > 0.4 && !isTimeConstrained) {
-        sessions.push({
-            type: 'VO2 Max',
-            count: 1,
-            hoursPerSession: vo2Hours,
-            totalWeekly: vo2Hours
-        });
-        totalHours += vo2Hours;
-    }
-
-    // Anaerobic (only if goal is speed and time allows)
-    const anerHours = availabilityHours * (zoneDistribution.anaerobic || 0);
-    if (anerHours > 0.3) {
-        sessions.push({
-            type: 'Anaerobic',
-            count: 1,
-            hoursPerSession: anerHours,
-            totalWeekly: anerHours
-        });
-        totalHours += anerHours;
-    }
-
-    // --- ENFORCE DAY CONSTRAINT (STRICT) ---
-    // Loop until we fit within daysAvailable
-    while (sessions.reduce((acc, s) => acc + s.count, 0) > daysAvailable) {
-        let totalSessions = sessions.reduce((acc, s) => acc + s.count, 0);
-        let actionTaken = false;
-
-        // 1. Drop Recovery
-        const recoveryIdx = sessions.findIndex(s => s.type === 'Recovery');
-        if (recoveryIdx !== -1) {
-            sessions.splice(recoveryIdx, 1);
-            actionTaken = true;
-        }
-
-        // 2. Consolidate Endurance
-        if (!actionTaken) {
-            const enduranceSessions = sessions.filter(s => s.type === 'Endurance');
-            // Case A: Multiple Endurance entries
-            if (enduranceSessions.length > 1) {
-                const firstIdx = sessions.findIndex(s => s.type === 'Endurance');
-                let extraHours = 0;
-                for (let i = sessions.length - 1; i > firstIdx; i--) {
-                    if (sessions[i].type === 'Endurance') {
-                        extraHours += sessions[i].totalWeekly;
-                        sessions.splice(i, 1);
-                    }
-                }
-                sessions[firstIdx].totalWeekly += extraHours;
-                sessions[firstIdx].count = 1;
-                sessions[firstIdx].hoursPerSession = sessions[firstIdx].totalWeekly;
-                actionTaken = true;
-            }
-            // Case B: Single Endurance entry with multiple days
-            else if (enduranceSessions.length === 1 && enduranceSessions[0].count > 1) {
-                const idx = sessions.findIndex(s => s.type === 'Endurance');
-                sessions[idx].count = 1;
-                sessions[idx].hoursPerSession = sessions[idx].totalWeekly; // Consolidate to one big ride
-                actionTaken = true;
-            }
-        }
-
-        // 3. Merge Smallest Intensity Session into Endurance
-        if (!actionTaken) {
-            // Identify non-Endurance sessions
-            const candidates = sessions.map((s, i) => ({ ...s, index: i }))
-                .filter(s => s.type !== 'Endurance');
-
-            if (candidates.length > 0) {
-                // Find the one with lowest hours (least important by volume distribution)
-                candidates.sort((a, b) => a.totalWeekly - b.totalWeekly);
-                const toMerge = candidates[0];
-
-                // Find Endurance to merge into
-                const endIdx = sessions.findIndex(s => s.type === 'Endurance');
-                if (endIdx !== -1) {
-                    sessions[endIdx].totalWeekly += toMerge.totalWeekly;
-                    sessions[endIdx].hoursPerSession = sessions[endIdx].totalWeekly;
-                    // Remove the intensity session
-                    sessions.splice(toMerge.index, 1);
-                } else {
-                    // No Endurance? Just drop it (or convert to Endurance? dropping is safer structure-wise)
-                    // If we have only 1 day available and it's occupied by a small session, we might want to keep the big one.
-                    // But here we are reducing count.
-                    sessions.splice(toMerge.index, 1);
-                }
-                actionTaken = true;
-            }
-        }
-
-        // 4. Fail-safe: If we stick cant reduce (e.g. 1 Endurance session but we need 0? Should not happen if min days >= 1)
-        if (!actionTaken) {
-            // Just drop the last session
-            if (sessions.length > 0) sessions.pop();
-            else break; // Sould not be reachable
-        }
-    }
-
-    // Recalculate stats
-    const finalTotalHours = sessions.reduce((acc, s) => acc + s.totalWeekly, 0);
-    const finalCount = sessions.reduce((acc, s) => acc + s.count, 0);
+    const fitted = fitIntensitySessionsToWeek(
+        selectedZones,
+        availabilityHours,
+        zoneDistribution,
+        structuredHistory,
+        effectiveRef,
+        workouts,
+        exposureCounts,
+        availabilityHours >= 6 && daysAvailable >= 4,
+        approachConfig,
+        1
+    );
 
     return {
-        sessions,
-        totalWeeklyHours: Math.round(finalTotalHours * 10) / 10,
-        sessionsPerWeek: finalCount
+        sessions: fitted.sessions,
+        totalWeeklyHours: Math.round(fitted.totalWeeklyHours * 10) / 10,
+        sessionsPerWeek: fitted.sessionsPerWeek,
+        zoneRanks: rankedZones,
+        maxIntensityTypes,
     };
 };
 
@@ -492,7 +1182,7 @@ const determineProgressionStrategy = (analysis, availabilityHours, avgSuccessVol
  * Applies progression multipliers to a session across the 4-week block.
  * Week 1: Base (1.0x), Week 2: +10%, Week 3: +15%, Week 4: -20% (recovery)
  */
-const applyWeeklyProgression = (baseSession, weekNumber, progressionType) => {
+const applyWeeklyProgression = (baseSession, weekNumber, progressionType, effectiveRef = 250, workouts = []) => {
     const volumeMultipliers = [1.0, 1.10, 1.15, 0.80]; // Volume progression + recovery week
     const intensityVolumeMultipliers = [1.0, 1.03, 1.05, 0.85]; // Keep volumes steadier for intensity blocks
     const intensityBoosts = [0, 0, 5, -15]; // Intensity: +5% w3, -15% w4 (easier recovery)
@@ -510,6 +1200,18 @@ const applyWeeklyProgression = (baseSession, weekNumber, progressionType) => {
         session.intensityBoost = intensityBoosts[weekNumber - 1];
     }
 
+    // Progress interval structure for structured (above-endurance) sessions
+    if (baseSession.intervalZone !== undefined && baseSession.intervalStartingLevel !== undefined) {
+        const progressed = buildIntervalPrescription(
+            baseSession.intervalZone,
+            baseSession.intervalStartingLevel,
+            weekNumber,
+            effectiveRef,
+            workouts
+        );
+        session.intervalDetails = ensureIntervalCoverage(progressed, session.hoursPerSession);
+    }
+
     return session;
 };
 
@@ -517,31 +1219,286 @@ const applyWeeklyProgression = (baseSession, weekNumber, progressionType) => {
  * Generates a 4-week progressive training plan.
  * Week 1: Base fitness, Week 2: Build, Week 3: Peak, Week 4: Recovery.
  */
-const generateFourWeekPlan = (baseWeeklyPlan, analysis, availabilityHours, avgSuccessVol, progressionType) => {
+const clampRestWeekCadence = (value) => {
+    const cadence = Number(value);
+    if (!Number.isFinite(cadence)) return 4;
+    if (cadence <= 2) return 2;
+    if (cadence === 3) return 3;
+    return 4;
+};
+
+const isRecoveryWeek = (weekNumber, restWeekCadence = 4) => {
+    const cadence = clampRestWeekCadence(restWeekCadence);
+    return (weekNumber % cadence) === 0;
+};
+
+const buildWeekVolumeMultipliers = (totalWeeks, approachConfig, restWeekCadence = 4) => {
+    const cadence = clampRestWeekCadence(restWeekCadence);
+    const ramp = approachConfig.volumeRamp || 0.06;
+    const secondBlockBoost = approachConfig.secondBlockBoost || 0.02;
+    const recoveryMultiplier = approachConfig.recoveryMultiplier || 0.75;
+    const multipliers = [];
+
+    for (let week = 1; week <= totalWeeks; week++) {
+        const inRecovery = isRecoveryWeek(week, cadence);
+        if (inRecovery) {
+            multipliers.push(recoveryMultiplier);
+            continue;
+        }
+
+        const cyclePos = ((week - 1) % cadence) + 1;
+        const cycleBuildSpots = Math.max(1, cadence - 1);
+        const progressFraction = cycleBuildSpots <= 1 ? 1 : (cyclePos - 1) / (cycleBuildSpots - 1);
+        const cycleBoost = Math.floor((week - 1) / cadence) * secondBlockBoost;
+        multipliers.push(1 + cycleBoost + (ramp * 2 * Math.max(0, progressFraction)));
+    }
+
+    return multipliers;
+};
+
+const getWeekZoneSelection = (weekNumber, rankedZones, maxIntensityTypes, restWeekCadence = 4) => {
+    const zones = rankedZones.map(entry => entry.zone);
+    const cadence = clampRestWeekCadence(restWeekCadence);
+    const cycleWeek = ((weekNumber - 1) % cadence) + 1;
+    if (isRecoveryWeek(weekNumber, cadence)) return [];
+    if (zones.length <= 1) return zones;
+
+    if (cadence <= 2) {
+        return zones.slice(0, maxIntensityTypes);
+    }
+
+    if (cycleWeek === 1) {
+        return zones.slice(0, Math.min(maxIntensityTypes, 2));
+    }
+    if (cycleWeek === 2) {
+        if (zones.length >= 3) return [zones[0], zones[2]].slice(0, maxIntensityTypes);
+        return zones.slice(0, maxIntensityTypes);
+    }
+    if (zones.length >= 3) {
+        return [zones[1], zones[2]].slice(0, maxIntensityTypes);
+    }
+    return zones.slice(0, maxIntensityTypes);
+};
+
+const getLocalDayKey = (dateLike) => {
+    const d = new Date(dateLike);
+    if (Number.isNaN(d.getTime())) return null;
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const resolveConstraintPrecedence = (constraint) => {
+    const explicit = String(constraint?.precedence || '').toLowerCase();
+    if (explicit === 'hard' || explicit === 'soft') return explicit;
+    const type = String(constraint?.type || '').toLowerCase();
+    if (['illness', 'sick', 'travel', 'holiday', 'unavailable'].includes(type)) return 'hard';
+    return 'soft';
+};
+
+const normalizeConstraintReduction = (value) => {
+    const raw = Number(value || 0);
+    const normalized = raw > 1 ? raw / 100 : raw;
+    return Math.max(0, Math.min(0.8, normalized));
+};
+
+const resolveConstraintDayPolicy = (dayMatches = []) => {
+    if (!Array.isArray(dayMatches) || dayMatches.length === 0) {
+        return { mode: 'none', reduction: 0, hasRace: false, hasTaper: false };
+    }
+
+    const normalized = dayMatches.map((constraint) => {
+        const precedence = resolveConstraintPrecedence(constraint);
+        const type = String(constraint?.type || '').toLowerCase();
+        return {
+            precedence,
+            type,
+            hardBlock: precedence === 'hard' && constraint?.blockTraining !== false,
+            reduction: normalizeConstraintReduction(constraint?.reduceAvailability || 0),
+        };
+    });
+
+    const hasRace = normalized.some(c => c.type === 'race');
+    const hasTaper = normalized.some(c => c.type === 'taper');
+    const hasHardBlock = normalized.some(c => c.hardBlock);
+    const maxSoftReduction = normalized.reduce((acc, c) => c.precedence === 'soft' ? Math.max(acc, c.reduction) : acc, 0);
+
+    // Deterministic precedence when overlaps exist on the same day:
+    // hard block > race > taper > soft.
+    if (hasHardBlock) {
+        return { mode: 'block', reduction: 0, hasRace, hasTaper };
+    }
+    if (hasRace) {
+        return { mode: 'race', reduction: Math.max(maxSoftReduction, 0.2), hasRace, hasTaper };
+    }
+    if (hasTaper) {
+        return { mode: 'taper', reduction: Math.max(maxSoftReduction, 0.35), hasRace, hasTaper };
+    }
+    return { mode: maxSoftReduction > 0 ? 'soft' : 'none', reduction: maxSoftReduction, hasRace, hasTaper };
+};
+
+const buildConstraintWeekMeta = (plannerConstraints = [], planStartDate = null, totalWeeks = 8) => {
+    const defaultStart = addWeeks(startOfWeek(new Date(), { weekStartsOn: 1 }), 1);
+    const parsedStart = planStartDate ? new Date(planStartDate) : null;
+    const baseStart = parsedStart && !Number.isNaN(parsedStart.getTime())
+        ? startOfWeek(parsedStart, { weekStartsOn: 1 })
+        : defaultStart;
+
+    const normalized = (plannerConstraints || [])
+        .map((constraint) => {
+            const startKey = getLocalDayKey(constraint?.startDate);
+            const endKey = getLocalDayKey(constraint?.endDate || constraint?.startDate);
+            if (!startKey || !endKey) return null;
+
+            const precedence = resolveConstraintPrecedence(constraint);
+            const reduceAvailability = normalizeConstraintReduction(constraint?.reduceAvailability || 0);
+            const type = String(constraint?.type || '').toLowerCase();
+
+            return {
+                startKey,
+                endKey,
+                precedence,
+                type,
+                hardBlock: precedence === 'hard' && constraint?.blockTraining !== false,
+                reduceAvailability,
+            };
+        })
+        .filter(Boolean);
+
+    return Array.from({ length: totalWeeks }, (_, idx) => {
+        const weekNumber = idx + 1;
+        const weekStart = addWeeks(baseStart, idx);
+        let hardDays = 0;
+        let softReduction = 0;
+        let hasRace = false;
+        let hasTaper = false;
+
+        for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+            const day = new Date(weekStart);
+            day.setDate(day.getDate() + dayOffset);
+            const dayKey = getLocalDayKey(day);
+            if (!dayKey) continue;
+
+            const dayMatches = normalized.filter(c => dayKey >= c.startKey && dayKey <= c.endKey);
+            if (!dayMatches.length) continue;
+
+            const dayPolicy = resolveConstraintDayPolicy(dayMatches);
+            if (dayPolicy.mode === 'block') {
+                hardDays += 1;
+            } else {
+                softReduction = Math.max(softReduction, dayPolicy.reduction || 0);
+                if (dayPolicy.mode === 'race') hasRace = true;
+                if (dayPolicy.mode === 'taper') hasTaper = true;
+            }
+        }
+
+        return {
+            weekNumber,
+            hardDays,
+            softReduction,
+            hasRace,
+            hasTaper,
+        };
+    });
+};
+
+const generateEightWeekPlan = (baseWeeklyPlan, zoneDistribution, availabilityHours, progressionType, effectiveRef = 250, workouts = [], structuredHistory = {}, approachConfig = TRAINING_APPROACHES.balanced, restWeekCadence = 4, plannerConstraints = [], planStartDate = null) => {
     const weeks = [];
+    const rankedZones = baseWeeklyPlan.zoneRanks || rankIntensityZones(zoneDistribution, structuredHistory);
+    const maxIntensityTypes = baseWeeklyPlan.maxIntensityTypes || getIntensitySessionLimit(availabilityHours, 5);
+    const exposureCounts = Object.fromEntries(rankedZones.map(({ zone }) => [zone, 0]));
+    const cadence = clampRestWeekCadence(restWeekCadence);
+    const weekVolumeMultipliers = buildWeekVolumeMultipliers(8, approachConfig, cadence);
+    const weekConstraintMeta = buildConstraintWeekMeta(plannerConstraints, planStartDate, 8);
 
-    for (let week = 1; week <= 4; week++) {
-        // Apply progression to each session
-        const weekSessions = baseWeeklyPlan.sessions.map(session =>
-            applyWeeklyProgression(session, week, progressionType)
-        );
+    for (let week = 1; week <= 8; week++) {
+        const constraintMeta = weekConstraintMeta[week - 1] || { hardDays: 0, softReduction: 0, hasRace: false, hasTaper: false };
+        const nextWeekMeta = weekConstraintMeta[week] || { hasRace: false, hasTaper: false };
+        const isRaceWeek = constraintMeta.hasRace || constraintMeta.hasTaper;
+        const isPreRaceWeek = !isRaceWeek && (nextWeekMeta.hasRace || nextWeekMeta.hasTaper);
+        const selectedZoneKeys = getWeekZoneSelection(week, rankedZones, maxIntensityTypes, cadence);
+        const selectedZones = rankedZones.filter(entry => selectedZoneKeys.includes(entry.zone));
+        let targetWeekHours = availabilityHours * weekVolumeMultipliers[week - 1];
 
-        // Calculate totals from progressed sessions to keep cards internally consistent
-        const weeklyHours = weekSessions.reduce((acc, s) => acc + (s.totalWeekly || 0), 0);
+        if (isPreRaceWeek) {
+            targetWeekHours *= 0.88;
+        }
+        if (isRaceWeek) {
+            targetWeekHours *= 0.65;
+        }
+        if (constraintMeta.softReduction > 0) {
+            targetWeekHours *= (1 - constraintMeta.softReduction);
+        }
+        if (constraintMeta.hardDays > 0) {
+            const availableFraction = Math.max(0, (7 - Math.min(7, constraintMeta.hardDays)) / 7);
+            targetWeekHours *= availableFraction;
+        }
 
-        // Determine focus label
-        let focus = '';
-        if (week === 1) focus = 'Base Building';
-        else if (week === 2) focus = 'Progressive Load';
-        else if (week === 3) focus = 'Peak Week';
-        else focus = 'Recovery & Adaptation';
+        const minWeekHours = isRaceWeek || constraintMeta.hardDays >= 5 ? 1.5 : 2.5;
+        targetWeekHours = Math.max(targetWeekHours, minWeekHours);
+
+        let weekPlan;
+        const forcedRecoveryWeek = isRaceWeek || constraintMeta.hardDays >= 5;
+        if (isRecoveryWeek(week, cadence) || forcedRecoveryWeek) {
+            if (constraintMeta.hardDays >= 7) {
+                weekPlan = {
+                    sessions: [],
+                    totalWeeklyHours: 0,
+                    sessionsPerWeek: 0,
+                };
+            } else {
+            const enduranceHours = Math.max(2, targetWeekHours);
+                const maxAvailableDays = Math.max(1, 7 - constraintMeta.hardDays);
+                const recoveryRideCount = Math.max(1, Math.min(enduranceHours >= 3 ? 2 : 1, maxAvailableDays));
+                weekPlan = {
+                    sessions: Array.from({ length: recoveryRideCount }, () => ({
+                        type: 'Endurance',
+                        count: 1,
+                        hoursPerSession: enduranceHours / recoveryRideCount,
+                        totalWeekly: enduranceHours / recoveryRideCount,
+                    })),
+                    totalWeeklyHours: enduranceHours,
+                    sessionsPerWeek: recoveryRideCount,
+                };
+            }
+        } else {
+            weekPlan = fitIntensitySessionsToWeek(
+                selectedZones,
+                targetWeekHours,
+                zoneDistribution,
+                structuredHistory,
+                effectiveRef,
+                workouts,
+                exposureCounts,
+                targetWeekHours >= 6,
+                approachConfig,
+                week
+            );
+            selectedZoneKeys.forEach(zone => {
+                exposureCounts[zone] = (exposureCounts[zone] || 0) + 1;
+            });
+        }
+
+        const cycleWeek = ((week - 1) % cadence) + 1;
+        const focus = isRaceWeek
+            ? 'Race Week Taper'
+            : isPreRaceWeek
+                ? 'Pre-Race Sharpening'
+                : isRecoveryWeek(week, cadence)
+            ? 'Recovery & Adaptation'
+            : cycleWeek === 1
+            ? 'Rebuild & Reintroduce'
+            : cycleWeek <= Math.max(2, cadence - 1)
+                ? 'Focused Load'
+                : 'Breakthrough Week';
 
         weeks.push({
             weekNumber: week,
-            sessions: weekSessions,
-            totalWeeklyHours: Math.round(weeklyHours * 10) / 10,
+            sessions: weekPlan.sessions,
+            totalWeeklyHours: Math.round(weekPlan.totalWeeklyHours * 10) / 10,
             focus,
-            intensity: `${100 + (progressionType === 'Intensity' ? intensityBoosts[week - 1] : 0)}%`
+            intensity: `${100 + (progressionType === 'Intensity' ? Math.round((weekVolumeMultipliers[week - 1] - 1) * 100) : 0)}%`
         });
     }
 
@@ -549,9 +1506,7 @@ const generateFourWeekPlan = (baseWeeklyPlan, analysis, availabilityHours, avgSu
         weeks,
         progressionType,
         totalPlanHours: Math.round(weeks.reduce((acc, w) => acc + w.totalWeeklyHours, 0) * 10) / 10,
-        rationale: progressionType === 'Volume'
-            ? `Progressive volume increase (B-B-P-R cycle): Your physiology responds well to volume. Weeks 1-3 build from ${weeks[0].totalWeeklyHours}h → ${weeks[2].totalWeeklyHours}h, week 4 recovers at ${weeks[3].totalWeeklyHours}h.`
-            : `Progressive intensity increase: Given time constraints, you'll maintain volume while progressively increasing intensity focus through weeks 1-3, with a recovery week 4.`
+        rationale: `This 8-week adaptive block progresses your proven interval sessions first, rotates emphasis across weeks so not every intensity type appears every week, applies a recovery week every ${cadence} week(s), factors in saved planning constraints (including race-taper weeks), and recalculates from the latest completion and feedback data.`
     };
 };
 
@@ -583,7 +1538,29 @@ const zoneDistributionToChart = (zoneDistribution) => {
  * Generates specific training recommendation text based on adaptations, phenotype, and availability.
  * Now blends historical success, goals, and availability to create personalized focus zones and session plan.
  */
-export const generateRecommendation = (analysis, profile, goal, availabilityHours, daysAvailable = 5) => {
+export const generateRecommendation = (analysis, profile, goal, availabilityHours, daysAvailable = 5, workouts = [], trainingApproach = 'suggested', plannerOptions = {}) => {
+    // Compute effective reference power: max(FTP, calculated CP)
+    const ftp = profile?.ftp || 250;
+    let effectiveRef = ftp;
+    const allWorkouts = workouts.length ? workouts : (analysis?.workouts || []);
+    if (allWorkouts.length) {
+        const allBest = {};
+        allWorkouts.forEach(w => {
+            if (!w.power_curve) return;
+            Object.entries(w.power_curve).forEach(([key, val]) => {
+                if (val && (!allBest[key] || val > allBest[key])) allBest[key] = val;
+            });
+        });
+        const cp3m = allBest['duration_3m'];
+        const cp20m = allBest['duration_20m'];
+        if (cp3m && cp20m) {
+            const computedCp = Math.round((cp20m * 1200 - cp3m * 180) / (1200 - 180));
+            effectiveRef = Math.max(ftp, computedCp);
+        }
+    }
+    const intervalCapacity = analyzeRecentIntervalCapacity(allWorkouts, effectiveRef);
+    const structuredHistory = analyzeStructuredSessionHistory(allWorkouts, effectiveRef);
+
     if (!analysis || analysis.insufficientData) {
         const fallbackZones = {
             recovery: 0.12,
@@ -593,11 +1570,33 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
             vo2max: 0.03
         };
 
+        const fallbackSuggested = {
+            key: 'balanced',
+            label: 'Balanced',
+            confidence: 40,
+            rationale: 'Not enough historical adaptation data yet; starting from a balanced progression.'
+        };
+        const selectedApproachConfig = normalizeApproachKey(trainingApproach) === 'suggested'
+            ? getApproachConfig(fallbackSuggested.key)
+            : getApproachConfig(trainingApproach);
+
         return {
             title: "Data Building Phase",
             description: "Keep logging rides! We need more history to build a custom ML model for you.",
             focusZones: zoneDistributionToChart(fallbackZones),
-            weeklyPlan: generateSessionPlan(fallbackZones, availabilityHours, 5, daysAvailable)
+            weeklyPlan: generateSessionPlan(
+                fallbackZones,
+                availabilityHours,
+                5,
+                daysAvailable,
+                intervalCapacity,
+                effectiveRef,
+                allWorkouts,
+                structuredHistory,
+                selectedApproachConfig
+            ),
+            suggestedApproach: fallbackSuggested,
+            trainingApproach: selectedApproachConfig
         };
     }
 
@@ -605,17 +1604,24 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
     const successfulBlocks = analysis.adaptations.filter(a => a.type === 'Stress Adaptation');
     const avgSuccessVol = successfulBlocks.length ? (successfulBlocks.reduce((acc, b) => acc + b.avgVol, 0) / successfulBlocks.length) : 0;
     const responderProfile = analyzeResponderProfile(analysis, profile);
+    const suggestedApproach = suggestTrainingApproach(analysis, responderProfile, allWorkouts, availabilityHours);
+    const selectedApproachConfig = normalizeApproachKey(trainingApproach) === 'suggested'
+        ? getApproachConfig(suggestedApproach.key)
+        : getApproachConfig(trainingApproach);
+    const restWeekCadence = clampRestWeekCadence(plannerOptions?.restWeekCadence || 4);
+    const plannerConstraints = Array.isArray(plannerOptions?.constraints) ? plannerOptions.constraints : [];
+    const plannerStartDate = plannerOptions?.planStartDate || null;
+    const selectedApproachConfidence = normalizeApproachKey(trainingApproach) === 'suggested'
+        ? Number(suggestedApproach.confidence || 50)
+        : getApproachFitConfidence(selectedApproachConfig.key, suggestedApproach);
 
     // --- SAFETY CHECK: Volume Progression (10% Rule) ---
-    // Calculate recent 4-week average volume
-    let recentAvgVol = 0;
-    if (analysis.weeklyStats && analysis.weeklyStats.length > 0) {
-        // Get last 4 weeks (or fewer if not enough data)
-        const recentWeeks = analysis.weeklyStats.slice(-4);
-        const validWeeks = recentWeeks.filter(w => w.volume > 0); // Filter out zero weeks? Maybe better to include them if they are real rest? 
-        // Let's include them to be conservative/honest about recent load, but maybe exclude strictly empty future weeks if they exist?
-        // Assuming weeklyStats are past data.
+    // Calculate rolling recent average (last 28 days) from completed, past workouts only.
+    let recentAvgVol = calculateRecentAverageVolume(allWorkouts, 28);
 
+    // Fallback for legacy or sparse workouts where durations may be missing.
+    if (recentAvgVol <= 0 && analysis.weeklyStats && analysis.weeklyStats.length > 0) {
+        const recentWeeks = analysis.weeklyStats.slice(-4);
         if (recentWeeks.length > 0) {
             recentAvgVol = recentWeeks.reduce((acc, w) => acc + (w.volume || 0), 0) / recentWeeks.length;
         }
@@ -632,16 +1638,45 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
     const zoneDistribution = blendHistoryWithGoal(analysis, goal, avgSuccessVol, responderProfile);
 
     // 3. Generate session breakdown
-    const weeklyPlan = generateSessionPlan(zoneDistribution, effectiveAvailability, avgSuccessVol, daysAvailable);
+    const weeklyPlan = generateSessionPlan(
+        zoneDistribution,
+        effectiveAvailability,
+        avgSuccessVol,
+        daysAvailable,
+        intervalCapacity,
+        effectiveRef,
+        allWorkouts,
+        structuredHistory,
+        selectedApproachConfig
+    );
 
     // 4. Determine progression strategy and generate 4-week plan
     const progressionType = determineProgressionStrategy(analysis, effectiveAvailability, avgSuccessVol, responderProfile);
-    const fourWeekPlan = generateFourWeekPlan(weeklyPlan, analysis, effectiveAvailability, avgSuccessVol, progressionType);
+    const fourWeekPlan = generateEightWeekPlan(
+        weeklyPlan,
+        zoneDistribution,
+        effectiveAvailability,
+        progressionType,
+        effectiveRef,
+        allWorkouts,
+        structuredHistory,
+        selectedApproachConfig,
+        restWeekCadence,
+        plannerConstraints,
+        plannerStartDate
+    );
 
     // 5. Generate narrative
     const phenotype = profile?.phenotype || 'All Rounder';
     let title = "Personalized Training Plan";
     let advice = [];
+
+    advice.push(`**Training Approach**: ${selectedApproachConfig.label} (${Math.round(selectedApproachConfidence)}% fit confidence from recent history).`);
+    if (normalizeApproachKey(trainingApproach) === 'suggested') {
+        advice.push(`**Suggested by History**: ${suggestedApproach.rationale}`);
+    } else {
+        advice.push(`**Suggested Baseline**: ${suggestedApproach.label} (${Math.round(suggestedApproach.confidence)}% confidence).`);
+    }
 
     // Safety Warning
     if (isCapped) {
@@ -710,7 +1745,13 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
         focusZones: zoneDistributionToChart(zoneDistribution),
         weeklyPlan,
         fourWeekPlan,
-        responderProfile
+        responderProfile,
+        suggestedApproach,
+        trainingApproach: selectedApproachConfig,
+        selectedApproachConfidence,
+        plannerSettings: {
+            restWeekCadence
+        }
     };
 };
 

@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useUser } from '../context/UserContext';
 import { Save, User, Activity, Heart, Link as LinkIcon, CheckCircle, Watch, LogOut, Calendar, RefreshCw } from 'lucide-react';
-import { calculateZones } from '../utils/analysis';
+import { calculateZones, buildCurveFromStreams } from '../utils/analysis';
 import { testProxyConnection, fetchStravaActivities, fetchStravaStreams } from '../utils/stravaApi';
 import { garminLogin, garminLogout, fetchGarminActivities, fetchGarminActivityStreams } from '../utils/garminApi';
+import { beginSync, endSync, normalizeSyncMode, getStravaSyncWindow as buildStravaSyncWindow, getGarminSyncWindow as buildGarminSyncWindow, isDuplicateWorkout } from '../utils/syncService';
 import { db } from '../utils/db';
 import styles from './Profile.module.css';
 
@@ -22,10 +23,13 @@ const Profile = () => {
     const [garminLoading, setGarminLoading] = useState(false);
     const [garminSyncing, setGarminSyncing] = useState(false);
     const [garminSyncMessage, setGarminSyncMessage] = useState('');
+    const [garminSyncMode, setGarminSyncMode] = useState('incremental'); // 'incremental' | 'all' | 'custom' | 'fromDate'
+    const [garminSyncFrom, setGarminSyncFrom] = useState('');
+    const [garminSyncTo, setGarminSyncTo] = useState('');
     const [proxyUrl, setProxyUrl] = useState('');
     const [proxyInput, setProxyInput] = useState('');
     const [status, setStatus] = useState('');
-    const [syncMode, setSyncMode] = useState('now'); // 'now' | 'all' | 'custom' | 'fromDate'
+    const [syncMode, setSyncMode] = useState('incremental'); // 'incremental' | 'all' | 'custom' | 'fromDate'
     const [syncFrom, setSyncFrom] = useState('');
     const [syncTo, setSyncTo] = useState('');
     const [syncing, setSyncing] = useState(false);
@@ -52,11 +56,18 @@ const Profile = () => {
 
             // Load sync period settings
             const savedSyncMode = await db.getSettings('sync_mode');
-            if (savedSyncMode) setSyncMode(savedSyncMode);
+            if (savedSyncMode) setSyncMode(normalizeSyncMode(savedSyncMode));
             const savedSyncFrom = await db.getSettings('sync_from');
             if (savedSyncFrom) setSyncFrom(savedSyncFrom);
             const savedSyncTo = await db.getSettings('sync_to');
             if (savedSyncTo) setSyncTo(savedSyncTo);
+
+            const savedGarminSyncMode = await db.getSettings('garmin_sync_mode');
+            if (savedGarminSyncMode) setGarminSyncMode(normalizeSyncMode(savedGarminSyncMode));
+            const savedGarminSyncFrom = await db.getSettings('garmin_sync_from');
+            if (savedGarminSyncFrom) setGarminSyncFrom(savedGarminSyncFrom);
+            const savedGarminSyncTo = await db.getSettings('garmin_sync_to');
+            if (savedGarminSyncTo) setGarminSyncTo(savedGarminSyncTo);
         };
         checkStravaStatus();
 
@@ -160,42 +171,42 @@ const Profile = () => {
         setTimeout(() => setStatus(''), 3000);
     };
 
-    /**
-     * Check if two start times are within 60 seconds of each other.
-     * Used to deduplicate activities synced from both Strava and Garmin.
-     */
-    const isSameStartTime = (time1, time2) => {
-        const t1 = new Date(time1).getTime();
-        const t2 = new Date(time2).getTime();
-        if (isNaN(t1) || isNaN(t2)) return false;
-        return Math.abs(t1 - t2) < 60000; // 60 second tolerance
-    };
-
     const handleGarminSyncActivities = async () => {
         if (!currentUser || !garminConnected) return;
+        if (!beginSync('garmin')) {
+            setGarminSyncMessage('Garmin sync is already running.');
+            return;
+        }
         setGarminSyncing(true);
         setGarminSyncMessage('Fetching Garmin activities...');
         try {
             const activities = await fetchGarminActivities(200);
+            const { fromTs, toTs } = await getGarminSyncWindow();
+            const filteredActivities = (activities || []).filter(activity => {
+                const startTs = new Date(activity.start_time).getTime();
+                if (!Number.isFinite(startTs)) return false;
+                if (fromTs && startTs < fromTs) return false;
+                if (toTs && startTs > toTs) return false;
+                return true;
+            });
 
-            if (!activities || activities.length === 0) {
+            if (!filteredActivities || filteredActivities.length === 0) {
                 setGarminSyncMessage('No cycling activities found on Garmin.');
                 setGarminSyncing(false);
                 setTimeout(() => setGarminSyncMessage(''), 4000);
                 return;
             }
 
-            setGarminSyncMessage(`Found ${activities.length} cycling activities. Importing...`);
+            setGarminSyncMessage(`Found ${filteredActivities.length} cycling activities. Importing...`);
             const existingWorkouts = await db.getWorkouts(currentUser.id);
             let newCount = 0;
             let skippedCount = 0;
             let backfilledCount = 0;
 
-            for (const activity of activities) {
+            for (const activity of filteredActivities) {
                 // Deduplication: check garmin_id, strava_id, or matching start_time
                 const existingWorkout = existingWorkouts.find(w =>
-                    w.garmin_id === activity.garmin_id ||
-                    isSameStartTime(w.start_time, activity.start_time)
+                    isDuplicateWorkout(w, activity)
                 );
 
                 if (existingWorkout) {
@@ -211,7 +222,9 @@ const Profile = () => {
                                     avg_power: existingWorkout.avg_power || (powerValues.length ? Math.round(powerValues.reduce((a, b) => a + b, 0) / powerValues.length) : 0),
                                     max_power: existingWorkout.max_power || (powerValues.length ? Math.max(...powerValues) : 0),
                                     avg_heart_rate: existingWorkout.avg_heart_rate || (hrValues.length ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length) : 0),
-                                    max_heart_rate: existingWorkout.max_heart_rate || (hrValues.length ? Math.max(...hrValues) : 0)
+                                    max_heart_rate: existingWorkout.max_heart_rate || (hrValues.length ? Math.max(...hrValues) : 0),
+                                    power_curve: buildCurveFromStreams(streams, 'power') || existingWorkout.power_curve || null,
+                                    heart_rate_curve: buildCurveFromStreams(streams, 'heart_rate') || existingWorkout.heart_rate_curve || null,
                                 });
                                 backfilledCount++;
                             }
@@ -234,7 +247,7 @@ const Profile = () => {
                 const powerValues = streams.map(s => Number(s.power)).filter(v => Number.isFinite(v) && v > 0);
                 const hrValues = streams.map(s => Number(s.heart_rate)).filter(v => Number.isFinite(v) && v > 0);
 
-                await db.addWorkout({
+                const upsertResult = await db.upsertWorkout({
                     userId: currentUser.id,
                     title: activity.name,
                     date: new Date(activity.start_time).toISOString(),
@@ -255,11 +268,16 @@ const Profile = () => {
                     elevation_gain: activity.elevation_gain || 0,
                     training_stress_score: activity.training_stress_score || null,
                     intensity_factor: activity.intensity_factor || null,
-                    power_curve: activity.power_curve || null,
+                    power_curve: activity.power_curve || buildCurveFromStreams(streams, 'power'),
+                    heart_rate_curve: activity.heart_rate_curve || buildCurveFromStreams(streams, 'heart_rate'),
                     streams
                 });
-                newCount++;
+                if (upsertResult.inserted) {
+                    newCount++;
+                }
             }
+
+            await db.saveSettings('garmin_last_sync', Math.floor(Date.now() / 1000));
 
             setGarminSyncMessage(`Synced ${newCount} new activities. Backfilled ${backfilledCount} existing rides with streams. (${skippedCount} duplicates skipped)`);
             setTimeout(() => setGarminSyncMessage(''), 5000);
@@ -267,19 +285,21 @@ const Profile = () => {
             console.error('Garmin activity sync error:', err);
             setGarminSyncMessage(`Sync failed: ${err.message}`);
         } finally {
+            endSync('garmin');
             setGarminSyncing(false);
         }
     };
 
     const handleSyncModeChange = async (mode) => {
-        setSyncMode(mode);
-        await db.saveSettings('sync_mode', mode);
-        if (mode === 'now') {
+        const normalizedMode = normalizeSyncMode(mode);
+        setSyncMode(normalizedMode);
+        await db.saveSettings('sync_mode', normalizedMode);
+        if (normalizedMode === 'incremental') {
             await db.saveSettings('sync_from', '');
             await db.saveSettings('sync_to', '');
             setSyncFrom('');
             setSyncTo('');
-        } else if (mode === 'all') {
+        } else if (normalizedMode === 'all') {
             const sixMonthsAgo = new Date();
             sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
             const fromStr = sixMonthsAgo.toISOString().split('T')[0];
@@ -287,7 +307,7 @@ const Profile = () => {
             await db.saveSettings('sync_to', '');
             setSyncFrom(fromStr);
             setSyncTo('');
-        } else if (mode === 'fromDate') {
+        } else if (normalizedMode === 'fromDate') {
             await db.saveSettings('sync_to', '');
             setSyncTo('');
         }
@@ -303,11 +323,58 @@ const Profile = () => {
         }
     };
 
+    const handleGarminSyncModeChange = async (mode) => {
+        const normalizedMode = normalizeSyncMode(mode);
+        setGarminSyncMode(normalizedMode);
+        await db.saveSettings('garmin_sync_mode', normalizedMode);
+        if (normalizedMode === 'incremental') {
+            await db.saveSettings('garmin_sync_from', '');
+            await db.saveSettings('garmin_sync_to', '');
+            setGarminSyncFrom('');
+            setGarminSyncTo('');
+        } else if (normalizedMode === 'all') {
+            const sixMonthsAgo = new Date();
+            sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+            const fromStr = sixMonthsAgo.toISOString().split('T')[0];
+            await db.saveSettings('garmin_sync_from', fromStr);
+            await db.saveSettings('garmin_sync_to', '');
+            setGarminSyncFrom(fromStr);
+            setGarminSyncTo('');
+        } else if (normalizedMode === 'fromDate') {
+            await db.saveSettings('garmin_sync_to', '');
+            setGarminSyncTo('');
+        }
+    };
+
+    const handleGarminCustomDateChange = async (field, value) => {
+        if (field === 'from') {
+            setGarminSyncFrom(value);
+            await db.saveSettings('garmin_sync_from', value);
+        } else {
+            setGarminSyncTo(value);
+            await db.saveSettings('garmin_sync_to', value);
+        }
+    };
+
+    const getGarminSyncWindow = async () => {
+        const lastSync = await db.getSettings('garmin_last_sync');
+        return buildGarminSyncWindow({
+            mode: garminSyncMode,
+            fromDate: garminSyncFrom,
+            toDate: garminSyncTo,
+            lastSyncEpoch: lastSync,
+        });
+    };
+
     const handleSyncNow = async () => {
         if (!currentUser) return;
         if (!stravaConnected) {
             setStatus('Connect to Strava first.');
             setTimeout(() => setStatus(''), 3000);
+            return;
+        }
+        if (!beginSync('strava')) {
+            setSyncMessage('Strava sync is already running.');
             return;
         }
         setSyncing(true);
@@ -321,26 +388,13 @@ const Profile = () => {
             }
             setSyncMessage('Fetching activities...');
 
-            let afterEpoch;
-            let beforeEpoch;
-            if (syncMode === 'all') {
-                const sixMonthsAgo = new Date();
-                sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-                afterEpoch = Math.floor(sixMonthsAgo.getTime() / 1000);
-            } else if (syncMode === 'custom') {
-                afterEpoch = syncFrom ? Math.floor(new Date(syncFrom).getTime() / 1000) : Math.floor(Date.now() / 1000);
-                if (syncTo) {
-                    const toDate = new Date(syncTo);
-                    toDate.setHours(23, 59, 59);
-                    beforeEpoch = Math.floor(toDate.getTime() / 1000);
-                }
-            } else if (syncMode === 'fromDate') {
-                afterEpoch = syncFrom ? Math.floor(new Date(syncFrom).getTime() / 1000) : Math.floor(Date.now() / 1000);
-            } else {
-                let lastSync = await db.getSettings('strava_last_sync');
-                if (!lastSync) lastSync = Math.floor(Date.now() / 1000);
-                afterEpoch = lastSync;
-            }
+            const lastSync = await db.getSettings('strava_last_sync');
+            const { afterEpoch, beforeEpoch } = buildStravaSyncWindow({
+                mode: syncMode,
+                fromDate: syncFrom,
+                toDate: syncTo,
+                lastSyncEpoch: lastSync,
+            });
 
             const activities = await fetchStravaActivities(afterEpoch, beforeEpoch);
             const cyclingTypes = ['Ride', 'VirtualRide', 'EBikeRide', 'Handcycle', 'Velomobile'];
@@ -359,9 +413,10 @@ const Profile = () => {
 
             for (const activity of rides) {
                 const isDuplicate = existingWorkouts.some(w =>
-                    w.strava_id === activity.id ||
-                    w.garmin_id && isSameStartTime(w.start_time, activity.start_date) ||
-                    isSameStartTime(w.start_time, activity.start_date)
+                    isDuplicateWorkout(w, {
+                        strava_id: activity.id,
+                        start_time: activity.start_date,
+                    })
                 );
                 if (isDuplicate) continue;
 
@@ -388,7 +443,7 @@ const Profile = () => {
                     maxPower = streamsData.watts ? Math.max(...streamsData.watts) : 0;
                 }
 
-                await db.addWorkout({
+                const upsertResult = await db.upsertWorkout({
                     userId: currentUser.id,
                     title: activity.name,
                     date: new Date(activity.start_date).toISOString(),
@@ -405,9 +460,13 @@ const Profile = () => {
                     max_heart_rate: activity.max_heartrate || 0,
                     normalized_power: activity.weighted_average_watts || activity.average_watts || 0,
                     total_work: activity.kilojoules ? activity.kilojoules * 1000 : 0,
+                    power_curve: buildCurveFromStreams(formattedStreams, 'power'),
+                    heart_rate_curve: buildCurveFromStreams(formattedStreams, 'heart_rate'),
                     streams: formattedStreams
                 });
-                newCount++;
+                if (upsertResult.inserted) {
+                    newCount++;
+                }
             }
 
             await db.saveSettings('strava_last_sync', Math.floor(Date.now() / 1000));
@@ -417,6 +476,7 @@ const Profile = () => {
             console.error('Sync error:', err);
             setSyncMessage(`Sync failed: ${err.message}`);
         } finally {
+            endSync('strava');
             setSyncing(false);
         }
     };
@@ -512,20 +572,20 @@ const Profile = () => {
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
-                                    <input type="radio" name="syncMode" value="now" checked={syncMode === 'now'} onChange={() => handleSyncModeChange('now')} />
-                                    From now onwards
+                                    <input type="radio" name="syncMode" value="incremental" checked={syncMode === 'incremental'} onChange={() => handleSyncModeChange('incremental')} />
+                                    Incremental (since last sync)
                                 </label>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
                                     <input type="radio" name="syncMode" value="all" checked={syncMode === 'all'} onChange={() => handleSyncModeChange('all')} />
-                                    All history (last 6 months)
+                                    Backfill last 6 months
                                 </label>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
                                     <input type="radio" name="syncMode" value="custom" checked={syncMode === 'custom'} onChange={() => handleSyncModeChange('custom')} />
-                                    Custom period
+                                    Custom date range
                                 </label>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
                                     <input type="radio" name="syncMode" value="fromDate" checked={syncMode === 'fromDate'} onChange={() => handleSyncModeChange('fromDate')} />
-                                    From a specific date onwards
+                                    From date onward
                                 </label>
                                 {syncMode === 'custom' && (
                                     <div style={{ display: 'flex', gap: '8px', marginLeft: '24px', marginTop: '4px' }}>
@@ -667,6 +727,67 @@ const Profile = () => {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: 'var(--space-sm)' }}>
                                     <Activity size={16} color="var(--text-secondary)" />
                                     <span className="text-sm" style={{ fontWeight: 600 }}>Garmin Activities</span>
+                                </div>
+                                <div style={{ marginBottom: 'var(--space-sm)' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                            <input type="radio" name="garminSyncMode" value="incremental" checked={garminSyncMode === 'incremental'} onChange={() => handleGarminSyncModeChange('incremental')} />
+                                            Incremental (since last sync)
+                                        </label>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                            <input type="radio" name="garminSyncMode" value="all" checked={garminSyncMode === 'all'} onChange={() => handleGarminSyncModeChange('all')} />
+                                            Backfill last 6 months
+                                        </label>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                            <input type="radio" name="garminSyncMode" value="custom" checked={garminSyncMode === 'custom'} onChange={() => handleGarminSyncModeChange('custom')} />
+                                            Custom date range
+                                        </label>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                            <input type="radio" name="garminSyncMode" value="fromDate" checked={garminSyncMode === 'fromDate'} onChange={() => handleGarminSyncModeChange('fromDate')} />
+                                            From date onward
+                                        </label>
+                                        {garminSyncMode === 'custom' && (
+                                            <div style={{ display: 'flex', gap: '8px', marginLeft: '24px', marginTop: '4px' }}>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                                    <small className="text-muted">From</small>
+                                                    <input
+                                                        type="date"
+                                                        value={garminSyncFrom}
+                                                        max={new Date().toISOString().split('T')[0]}
+                                                        min={(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().split('T')[0]; })()}
+                                                        onChange={(e) => handleGarminCustomDateChange('from', e.target.value)}
+                                                        style={{ padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: '0.8rem' }}
+                                                    />
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                                    <small className="text-muted">To</small>
+                                                    <input
+                                                        type="date"
+                                                        value={garminSyncTo}
+                                                        max={new Date().toISOString().split('T')[0]}
+                                                        min={garminSyncFrom || (() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().split('T')[0]; })()}
+                                                        onChange={(e) => handleGarminCustomDateChange('to', e.target.value)}
+                                                        style={{ padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: '0.8rem' }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                        {garminSyncMode === 'fromDate' && (
+                                            <div style={{ display: 'flex', gap: '8px', marginLeft: '24px', marginTop: '4px' }}>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                                    <small className="text-muted">Starting from</small>
+                                                    <input
+                                                        type="date"
+                                                        value={garminSyncFrom}
+                                                        max={new Date().toISOString().split('T')[0]}
+                                                        min={(() => { const d = new Date(); d.setMonth(d.getMonth() - 6); return d.toISOString().split('T')[0]; })()}
+                                                        onChange={(e) => handleGarminCustomDateChange('from', e.target.value)}
+                                                        style={{ padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: '0.8rem' }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                                 <p className="text-muted" style={{ fontSize: '0.8rem', marginBottom: 'var(--space-sm)' }}>
                                     Import cycling activities with HR, power, speed, and distance. Duplicates with Strava are automatically detected and skipped.
