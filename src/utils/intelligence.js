@@ -1671,12 +1671,11 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
     let title = "Personalized Training Plan";
     let advice = [];
 
-    advice.push(`**Training Approach**: ${selectedApproachConfig.label} (${Math.round(selectedApproachConfidence)}% fit confidence from recent history).`);
-    if (normalizeApproachKey(trainingApproach) === 'suggested') {
-        advice.push(`**Suggested by History**: ${suggestedApproach.rationale}`);
-    } else {
-        advice.push(`**Suggested Baseline**: ${suggestedApproach.label} (${Math.round(suggestedApproach.confidence)}% confidence).`);
-    }
+    // Two distinct metrics: plan-fit confidence (aggressiveness match) vs. the responder block's model-classification confidence below.
+    const approachRationale = normalizeApproachKey(trainingApproach) === 'suggested'
+        ? suggestedApproach.rationale
+        : `Baseline suggestion: **${suggestedApproach.label}** (${Math.round(suggestedApproach.confidence)}% plan-fit confidence).`;
+    advice.push(`**Training Approach**: ${selectedApproachConfig.label} — ${Math.round(selectedApproachConfidence)}% plan-fit confidence from recent history. ${approachRationale}`);
 
     // Safety Warning
     if (isCapped) {
@@ -1685,13 +1684,13 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
     }
 
     if (responderProfile?.recommendations) {
-        advice.push(`🎯 **${responderProfile.recommendations.title}**`);
-        advice.push(responderProfile.recommendations.message);
-        if (responderProfile.recommendations.zoneRecommendation) {
-            advice.push(`**Model Readout**: ${responderProfile.recommendations.zoneRecommendation}`);
-        }
-        if (responderProfile.recommendations.progressionTip) {
-            advice.push(`**Progression Tip**: ${responderProfile.recommendations.progressionTip}`);
+        const { title: responderTitle, message: responderMessage, zoneRecommendation, progressionTip } = responderProfile.recommendations;
+        const responderLines = [`🎯 **${responderTitle}**`, responderMessage];
+        if (zoneRecommendation) responderLines.push(zoneRecommendation);
+        advice.push(responderLines.join('\n'));
+
+        if (progressionTip) {
+            advice.push(`**Progression Tip**: ${progressionTip}`);
         }
 
         if (responderProfile.hasResponderShift && responderProfile.lastShiftDate) {
@@ -1708,22 +1707,32 @@ export const generateRecommendation = (analysis, profile, goal, availabilityHour
             advice.push(`Your history shows success with **${avgSuccessVol.toFixed(1)}h/week**, but you have **${effectiveAvailability.toFixed(1)}h** available.`);
         }
         advice.push(`This plan prioritizes **intensity over volume**—focus on high-quality sessions to maximize your training effect.`);
-    } else if (responderProfile?.responderType === 'Volume' || successfulBlocks.length > 0) {
-        title = "Proven Formula Refined";
-        if (!isCapped) {
-            if (responderProfile?.responderType === 'Volume') {
-                advice.push(`Your trained local model currently leans toward **volume-based training** with **${responderProfile.volumeResponderScore}% probability**.`);
-            } else {
-                advice.push(`Your physiology responds well to **volume-based training** (best gains at **${avgSuccessVol.toFixed(1)}h/week**).`);
-            }
-            advice.push(`This plan maintains similar volume while tailoring zones to your **${goal || 'balanced'}** goal.`);
-        } else {
-            advice.push(`Your physiology responds well to volume, so we will build towards that safely.`);
-        }
     } else if (responderProfile?.responderType === 'Intensity') {
         title = 'Intensity Responder Plan';
         advice.push(`Your trained local model currently leans toward **intensity-focused training** with **${responderProfile.intensityResponderScore}% probability**.`);
         advice.push(`This plan keeps enough aerobic support work to stay durable while emphasizing the harder work your history responds to best.`);
+    } else if (responderProfile?.responderType === 'Volume') {
+        title = "Proven Formula Refined";
+        if (!isCapped) {
+            advice.push(`Your trained local model currently leans toward **volume-based training** with **${responderProfile.volumeResponderScore}% probability**.`);
+            advice.push(`This plan maintains similar volume while tailoring zones to your **${goal || 'balanced'}** goal.`);
+        } else {
+            advice.push(`Your physiology responds well to volume, so we will build towards that safely.`);
+        }
+    } else if (responderProfile?.responderType === 'Balanced' || responderProfile?.responderType === 'Mixed') {
+        title = "Balanced Formula Refined";
+        advice.push(`Your trained local model sees a balanced response, drawing gains from both volume and intensity work.`);
+        if (!isCapped) {
+            advice.push(`This plan maintains similar volume while tailoring zones to your **${goal || 'balanced'}** goal.`);
+        }
+    } else if (successfulBlocks.length > 0) {
+        title = "Proven Formula Refined";
+        if (!isCapped) {
+            advice.push(`Your physiology responds well to **volume-based training** (best gains at **${avgSuccessVol.toFixed(1)}h/week**).`);
+            advice.push(`This plan maintains similar volume while tailoring zones to your **${goal || 'balanced'}** goal.`);
+        } else {
+            advice.push(`Your physiology responds well to volume, so we will build towards that safely.`);
+        }
     }
 
     // Goal-specific guidance

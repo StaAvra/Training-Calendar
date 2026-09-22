@@ -2,23 +2,38 @@ import { db } from './db';
 
 /**
  * Gets the backend proxy URL.
- * Uses relative URL by default (works through Vite proxy or same-origin setups).
- * Falls back to explicit proxy_url setting if configured.
+ * Strategy:
+ * 1. Use explicitly saved proxy URL (user override)
+ * 2. In browser on non-localhost hosts, auto-detect same host on port 3000
+ * 3. In local dev/electron, default to localhost backend
  */
 const getProxyUrl = async () => {
     const saved = await db.getSettings('proxy_url');
     if (saved) return saved;
 
-    // Use relative URL - works through Vite proxy in dev,
-    // and through same-origin in production
-    return '';
+    if (typeof window !== 'undefined') {
+        const { protocol, hostname } = window.location;
+
+        if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+            return `${protocol}//${hostname}:3000`;
+        }
+    }
+
+    return 'http://localhost:3000';
 };
 
 /**
  * Safely parse a JSON response, with a clear error if it's HTML instead.
  */
-const safeJson = async (res) => {
+const safeJson = async (res, context = 'request') => {
     const text = await res.text();
+
+    if (!text.trim()) {
+        return {
+            error: `${context} failed with HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`
+        };
+    }
+
     try {
         return JSON.parse(text);
     } catch {
@@ -26,7 +41,11 @@ const safeJson = async (res) => {
         if (text.trim().startsWith('<!') || text.trim().startsWith('<html')) {
             throw new Error('Backend server not reachable. Make sure the backend is running on port 3000.');
         }
-        throw new Error(`Invalid response from server: ${text.substring(0, 100)}`);
+
+        return {
+            error: `Invalid ${context} response (HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''})`,
+            details: text.substring(0, 180)
+        };
     }
 };
 
@@ -43,11 +62,11 @@ export const garminLogin = async (username, password) => {
     });
 
     if (!res.ok) {
-        const err = await safeJson(res);
+        const err = await safeJson(res, 'Garmin login');
         throw new Error(err.error || 'Garmin login failed');
     }
 
-    const data = await safeJson(res);
+    const data = await safeJson(res, 'Garmin login');
 
     // Save tokens for session reuse
     if (data.tokens) {
@@ -99,14 +118,14 @@ export const fetchGarminSleepData = async (dateStr) => {
     const res = await fetch(`${proxyUrl}/api/garmin/sleep?date=${encodeURIComponent(dateStr)}`);
 
     if (!res.ok) {
-        const err = await safeJson(res);
+        const err = await safeJson(res, 'Garmin sleep fetch');
         if (res.status === 401) {
             await db.saveSettings('garmin_connected', false);
         }
         throw new Error(err.error || 'Failed to fetch Garmin sleep data');
     }
 
-    const data = await safeJson(res);
+    const data = await safeJson(res, 'Garmin sleep fetch');
 
     // Update stored tokens if refreshed
     if (data.tokens) {
@@ -150,14 +169,14 @@ export const fetchGarminActivities = async (maxActivities = 200) => {
         const res = await fetch(`${proxyUrl}/api/garmin/activities?start=${start}&limit=${pageSize}`);
 
         if (!res.ok) {
-            const err = await safeJson(res);
+            const err = await safeJson(res, 'Garmin activities fetch');
             if (res.status === 401) {
                 await db.saveSettings('garmin_connected', false);
             }
             throw new Error(err.error || 'Failed to fetch Garmin activities');
         }
 
-        const data = await safeJson(res);
+        const data = await safeJson(res, 'Garmin activities fetch');
 
         if (data.tokens) {
             await db.saveSettings('garmin_tokens', data.tokens);
@@ -189,14 +208,14 @@ export const fetchGarminActivityStreams = async (activityId) => {
     const res = await fetch(`${proxyUrl}/api/garmin/activities/${encodeURIComponent(activityId)}/streams`);
 
     if (!res.ok) {
-        const err = await safeJson(res);
+        const err = await safeJson(res, 'Garmin activity streams fetch');
         if (res.status === 401) {
             await db.saveSettings('garmin_connected', false);
         }
         throw new Error(err.error || 'Failed to fetch Garmin activity streams');
     }
 
-    const data = await safeJson(res);
+    const data = await safeJson(res, 'Garmin activity streams fetch');
     if (data.tokens) {
         await db.saveSettings('garmin_tokens', data.tokens);
     }

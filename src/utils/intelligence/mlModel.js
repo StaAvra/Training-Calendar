@@ -445,16 +445,18 @@ export const describeResponderProfile = (model) => {
         };
     }
 
+    // Build from whatever labels the model actually trained on, so the percentages always sum to ~100%.
     const probabilities = model.responderProbabilities || {};
-    const intensity = probabilities.Intensity || 0;
-    const volume = probabilities.Volume || 0;
-    const balanced = probabilities.Balanced || 0;
+    const zoneRecommendation = `Current responder probabilities: ${Object.entries(probabilities)
+        .sort(([, left], [, right]) => right - left)
+        .map(([label, value]) => `${label} ${value}%`)
+        .join(', ')}.`;
 
     if (model.responderType === 'Intensity') {
         return {
             title: 'Intensity Responder Identified',
-            message: `Your local model classifies you as an intensity-responder with **${model.confidence}% confidence**. Historical blocks with more threshold and VO2 work produced your strongest gains.`,
-            zoneRecommendation: `Current responder probabilities: Intensity ${intensity}%, Volume ${volume}%, Balanced ${balanced}%.`,
+            message: `Your local model classifies you as an intensity-responder with **${model.confidence}% model-classification confidence**. Historical blocks with more threshold and VO2 work produced your strongest gains.`,
+            zoneRecommendation,
             progressionTip: 'Use your historical high-intensity response as the anchor, then bend volume only as much as your current availability allows.'
         };
     }
@@ -462,8 +464,8 @@ export const describeResponderProfile = (model) => {
     if (model.responderType === 'Volume') {
         return {
             title: 'Volume Responder Identified',
-            message: `Your local model classifies you as a volume-responder with **${model.confidence}% confidence**. Your strongest blocks came from consistent aerobic work, not just denser intensity.`,
-            zoneRecommendation: `Current responder probabilities: Volume ${volume}%, Intensity ${intensity}%, Balanced ${balanced}%.`,
+            message: `Your local model classifies you as a volume-responder with **${model.confidence}% model-classification confidence**. Your strongest blocks came from consistent aerobic work, not just denser intensity.`,
+            zoneRecommendation,
             progressionTip: 'Preserve repeatable weekly volume first, then add intensity carefully around that base.'
         };
     }
@@ -471,16 +473,16 @@ export const describeResponderProfile = (model) => {
     if (model.responderType === 'Balanced') {
         return {
             title: 'Balanced Responder',
-            message: `Your local model sees a balanced response pattern with **${model.confidence}% confidence**. You adapt from both aerobic load and targeted intensity when they are sequenced well.`,
-            zoneRecommendation: `Current responder probabilities: Balanced ${balanced}%, Volume ${volume}%, Intensity ${intensity}%.`,
+            message: `Your local model sees a balanced response pattern with **${model.confidence}% model-classification confidence**. You adapt from both aerobic load and targeted intensity when they are sequenced well.`,
+            zoneRecommendation,
             progressionTip: 'Keep a mixed structure and use goal demands to decide which side to emphasize in the next block.'
         };
     }
 
     return {
         title: 'Mixed Responder Profile',
-        message: `Your local model detects mixed signals across your history with **${model.confidence}% confidence**. Your best response appears to depend on the phase you were in.`,
-        zoneRecommendation: `Current responder probabilities: Volume ${volume}%, Intensity ${intensity}%, Balanced ${balanced}%.`,
+        message: `Your local model detects mixed signals across your history with **${model.confidence}% model-classification confidence**. Your best response appears to depend on the phase you were in.`,
+        zoneRecommendation,
         progressionTip: 'Use recent blocks as the stronger signal, especially if the timeline shows a shift in what you respond to now.'
     };
 };

@@ -496,6 +496,7 @@ const Dashboard = () => {
                 }
             }
             await db.saveSettings('garmin_last_sync', Math.floor(Date.now() / 1000));
+            await syncGarminMetrics(true);
             if (!silent) {
                 setGarminSyncMsg(`Synced ${newCount} new Garmin ride${newCount !== 1 ? 's' : ''}; backfilled ${backfilledCount} existing ride${backfilledCount !== 1 ? 's' : ''} with streams.`);
             }

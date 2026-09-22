@@ -481,7 +481,14 @@ export const checkFtpImprovement = (workouts, currentFtp, profile = {}) => {
 
     const bestPower = bestRide ? (bestRide.normalized_power || bestRide.avg_power) : 0;
 
-    if (bestPower > currentFtp * 1.05) {
+    // Guard against short (<8-min) intervals skewing normalized power upward: only trust this
+    // as an FTP-relevant effort if the ride's power curve shows it was actually sustained for
+    // at least 8 minutes, not just a brief high-power spike (e.g. a 2-min VO2max interval).
+    const bestRideCurve = bestRide ? getWorkoutPowerCurve(bestRide) : null;
+    const sustainedAt8m = bestRideCurve?.duration_8m || 0;
+    const isSustainedEffort = bestPower > 0 && sustainedAt8m >= bestPower * 0.9;
+
+    if (bestPower > currentFtp * 1.05 && isSustainedEffort) {
         return {
             suggestedUpdate: Math.round(bestPower * 0.95),
             reason: `Detected strong effort on ${new Date(bestRide.date).toLocaleDateString()}. Power: ${Math.round(bestPower)}W`
@@ -533,28 +540,17 @@ export const calculatePhenotype = (powerCurve, weight = 70, sex = 'male') => {
         threshold: (powerCurve.duration_20m * 0.95) / weight
     };
 
-    // 2. Reference Ranges (from screenshots) - used for normalization/comparison
-    // These are simplified averages for "Normalizing" the scores to identify RELATIVE strengths
-    const ref = {
-        sprint: 16,     // Average: 14-17
-        anaerobic: 8.5, // Average: 7.5-9.0
-        vo2max: 5.8,    // Average: 5.5-6.2
-        threshold: 4.5  // Average: 4.2-4.8
-    };
-
-    // 3. Calculate Relative Scores (How does this athlete compare to the "average" across these 4 metrics?)
-    // This allows us to see where they deviate most from their own "median" performance
+    // 2. Score each duration against the same Coggan benchmark tables used by the
+    // Performance Profile chart (calculateInterpolatedScore), so strengths/weaknesses
+    // always agree with what the chart displays.
     const scores = {
-        sprint: metrics.sprint / ref.sprint,
-        anaerobic: metrics.anaerobic / ref.anaerobic,
-        vo2max: metrics.vo2max / ref.vo2max,
-        threshold: metrics.threshold / ref.threshold
+        sprint: calculateInterpolatedScore(metrics.sprint, 'sprint', sex),
+        anaerobic: calculateInterpolatedScore(metrics.anaerobic, 'anaerobic', sex),
+        vo2max: calculateInterpolatedScore(metrics.vo2max, 'vo2max', sex),
+        threshold: calculateInterpolatedScore(metrics.threshold, 'threshold', sex)
     };
 
-    // 4. Identify Strengths & Weaknesses
-    // We compare each score to the athlete's own average performance score
-    const avgScore = (scores.sprint + scores.anaerobic + scores.vo2max + scores.threshold) / 4;
-
+    // 3. Identify Strengths & Weaknesses from the interpolated scores
     const sortedCategories = [
         { label: 'Sprinting', score: scores.sprint, refLabel: 'Neuromuscular Power' },
         { label: 'Attacking/Short Climbs', score: scores.anaerobic, refLabel: 'Anaerobic Capacity' },
@@ -565,7 +561,7 @@ export const calculatePhenotype = (powerCurve, weight = 70, sex = 'male') => {
     const strengths = sortedCategories.slice(0, 1).map(c => c.label);
     const weaknesses = sortedCategories.slice(-1).map(c => c.label);
 
-    // 5. Determine Phenotype and Multiplier Adjustment for FTP
+    // 4. Determine Phenotype and Multiplier Adjustment for FTP
     // Sprinter/Punchy: High sprint/anaerobic RELATIVE to threshold
     // TT/Climber: High threshold RELATIVE to sprint/anaerobic
 
